@@ -21,7 +21,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Gallup Pakistan: National LFS Survey 2020-21")
+st.title("📊 Gallup Pakistan: National LFS Survey 2024-25")
 
 # --- 2. OPTIMIZED DATA LOADER ---
 @st.cache_resource
@@ -320,4 +320,5 @@ if df is not None:
 
 else:
     st.info("Awaiting Data...")
+
 
