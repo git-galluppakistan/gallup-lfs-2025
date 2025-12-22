@@ -60,17 +60,15 @@ def load_data_optimized():
                 district_lookup = map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
                 
                 if "PCode" in df.columns:
-                    # Map Districts, but fill Missing values with "Unknown" instead of NaN
+                    # Map Districts, fill missing with "Unknown"
                     df["District"] = df["PCode"].astype(str).map(district_lookup).fillna("Unknown")
                     df["District"] = df["District"].astype('category')
                 else:
                     st.warning("⚠️ PCode column missing in main data.")
         else:
-            # If mapping missing, create placeholder
             df["District"] = "Unknown"
 
-        # --- D. SPELLING FIXER (Balochistan) ---
-        # Auto-correct common spelling issues in the data
+        # --- D. SPELLING FIXER ---
         for col in df.columns:
             if "Province" in col:
                 df[col] = df[col].astype(str).replace({
@@ -112,8 +110,7 @@ if df is not None:
     dist_col = "District"
     reg_col = get_col(["Region"])
     
-    # Remove ONLY strictly bad rows (Empty/Null)
-    # Important: We DO NOT remove "Unknown" districts anymore, so Province data stays visible.
+    # Remove ONLY strictly bad rows (Empty/Null/NaN)
     for col in [prov_col, reg_col]:
         if col and col in df.columns:
             df = df[~df[col].astype(str).isin(["#NULL!", "nan", "None", "nan", ""])]
@@ -128,7 +125,7 @@ if df is not None:
 
     def get_clean_list(column):
         if column and column in df.columns:
-            return sorted([x for x in df[column].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", ""]])
+            return sorted([x for x in df[column].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown"]])
         return []
 
     # 1. Province
@@ -140,9 +137,9 @@ if df is not None:
         min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
         sel_age = st.sidebar.slider("Age Range", min_age, max_age, (min_age, max_age))
     
-    # 3. District
+    # 3. District (Exclude Unknown from dropdown)
     if sel_prov and dist_col in df.columns:
-        valid_districts = sorted([x for x in df[df[prov_col].isin(sel_prov)][dist_col].unique().tolist() if str(x) not in ["#NULL!", "nan", ""]])
+        valid_districts = sorted([x for x in df[df[prov_col].isin(sel_prov)][dist_col].unique().tolist() if str(x) not in ["#NULL!", "nan", "", "Unknown"]])
     else:
         valid_districts = []
     sel_dist = st.sidebar.multiselect("District", valid_districts)
@@ -215,7 +212,6 @@ if df is not None:
             with open(geojson_path) as f:
                 pak_geojson = json.load(f)
             
-            # Karachi Grouping
             merge_map = {
                 "KARACHI CENTRAL": "KARACHI", "KARACHI EAST": "KARACHI",
                 "KARACHI SOUTH": "KARACHI", "KARACHI WEST": "KARACHI",
@@ -223,8 +219,11 @@ if df is not None:
                 "EAST": "KARACHI", "WEST": "KARACHI"
             }
             map_df = main_data.copy()
-            # Ensure District column is string for replacing
+            # Ensure District column is string
             map_df["Map_District"] = map_df[dist_col].astype(str).replace(merge_map)
+            
+            # --- FIX: EXCLUDE UNKNOWN FROM MAP ---
+            map_df = map_df[map_df["Map_District"] != "Unknown"]
             
             dist_stats = pd.crosstab(map_df["Map_District"], map_df[target_q], normalize='index') * 100
             
@@ -320,16 +319,18 @@ if df is not None:
                 st.plotly_chart(fig5, use_container_width=True)
 
         # ==========================================================
-        # ROW 4: DISTRICT TREEMAP (The Heatmap)
+        # ROW 4: DISTRICT TREEMAP
         # ==========================================================
         st.markdown("---")
         st.subheader("🧱 District Treemap (Size vs Result)")
         st.caption(f"**Size** = Respondent Volume | **Color** = % answering '{top_ans}' (Yellow = High)")
         
         if dist_col in main_data.columns:
-            # Treemap uses raw ungrouped districts
-            top_10 = main_data[dist_col].value_counts().head(15).index.tolist()
-            subset = main_data[main_data[dist_col].isin(top_10)]
+            # --- FIX: EXCLUDE UNKNOWN FROM TREEMAP ---
+            valid_subset = main_data[main_data[dist_col] != "Unknown"]
+            
+            top_10 = valid_subset[dist_col].value_counts().head(15).index.tolist()
+            subset = valid_subset[valid_subset[dist_col].isin(top_10)]
             
             dist_stats_tree = pd.crosstab(subset[dist_col], subset[target_q], normalize='index') * 100
             
@@ -370,4 +371,3 @@ if df is not None:
 
 else:
     st.info("Awaiting Data...")
-
