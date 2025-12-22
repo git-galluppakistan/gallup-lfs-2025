@@ -21,7 +21,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Gallup Pakistan: National LFS Survey 2024-25")
+st.title("📊 Gallup Pakistan: National LFS Survey")
 
 # --- 2. OPTIMIZED DATA LOADER ---
 @st.cache_resource
@@ -132,7 +132,7 @@ if df is not None:
     ignore = [prov_col, reg_col, sex_col, dist_col, tehsil_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode"]
     questions = [c for c in df.columns if c not in ignore]
     
-    default_target = "Marital Status (S4C7)"
+    default_target = "Marital status (S4C7)"
     default_index = questions.index(default_target) if default_target in questions else 0
     target_q = st.selectbox("Select Question to Analyze:", questions, index=default_index)
 
@@ -140,15 +140,30 @@ if df is not None:
         # Prepare Data
         cols_to_load = [target_q] + [c for c in [prov_col, sex_col, reg_col, dist_col, age_col] if c]
         main_data = df.loc[mask, cols_to_load]
+        
+        # --- AGGRESSIVE CLEANER (Fixes the #NULL! issue) ---
+        # 1. Clean the Question Column
         main_data[target_q] = main_data[target_q].astype(str)
-        main_data = main_data[main_data[target_q] != "#NULL!"]
-        main_data = main_data[main_data[target_q] != "nan"]
+        main_data = main_data[~main_data[target_q].isin(["#NULL!", "nan", "None", "DK", "NR"])]
+        
+        # 2. Clean the District Column (Fixes Treemap)
+        if dist_col:
+            main_data = main_data[~main_data[dist_col].astype(str).isin(["#NULL!", "nan", "None"])]
+            
+        # 3. Clean the Province Column
+        if prov_col:
+            main_data = main_data[~main_data[prov_col].astype(str).isin(["#NULL!", "nan", "None"])]
+        # ----------------------------------------------------
         
         # Detect Top Answer
-        top_ans = main_data[target_q].mode()[0]
+        if not main_data.empty:
+            top_ans = main_data[target_q].mode()[0]
+        else:
+            top_ans = "N/A"
+            st.warning("No data available after filtering.")
 
         # ==========================================================
-        # ROW 1: THE HERO MAP (Enhanced Colors)
+        # ROW 1: THE HERO MAP
         # ==========================================================
         st.subheader("🗺️ Geographic Distribution")
         st.caption(f"**Red** = High Percentage | **Blue** = Low Percentage (Showing data for: '{top_ans}')")
@@ -175,18 +190,11 @@ if df is not None:
                 map_data = dist_stats[[top_ans]].reset_index()
                 map_data.columns = ["District", "Percent"]
                 
-                # --- COLOR ENHANCEMENT HERE ---
                 fig_map = px.choropleth_mapbox(
                     map_data, geojson=pak_geojson, locations="District",
                     featureidkey="properties.districts",
                     color="Percent", 
-                    
-                    # 1. New High-Contrast Color Scale (Red=High, Blue=Low)
                     color_continuous_scale="Spectral_r", 
-                    
-                    # 2. Auto-Scale (Removed fixed 0-100 range)
-                    # range_color=(0, 100), 
-                    
                     mapbox_style="carto-positron",
                     zoom=4.5, center = {"lat": 30.3753, "lon": 69.3451},
                     opacity=0.7, labels={'Percent': f'% {top_ans}'}
@@ -320,6 +328,3 @@ if df is not None:
 
 else:
     st.info("Awaiting Data...")
-
-
-
