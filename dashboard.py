@@ -4,7 +4,6 @@ import plotly.express as px
 import os
 import gc
 import json
-import numpy as np
 
 # --- 1. SETUP ---
 st.set_page_config(page_title="Gallup Pakistan Dashboard", layout="wide", page_icon="📊")
@@ -70,63 +69,44 @@ df = load_data_optimized()
 
 # --- 3. DASHBOARD LOGIC ---
 if df is not None:
+    # --- SIDEBAR FILTERS ---
+    st.sidebar.title("🔍 Filter Panel")
     
-    # --- GLOBAL DATA CLEANING (Removes NULLs from Filters) ---
     def get_col(candidates):
         for c in candidates:
             for col in df.columns:
                 if c in col: return col
         return None
 
+    # Get Columns
     prov_col = get_col(["Province"])
-    dist_col = get_col(["District"])
     reg_col = get_col(["Region"])
-    
-    # Remove rows where Province/District/Region is NULL/NaN/Empty
-    for col in [prov_col, dist_col, reg_col]:
-        if col:
-            # Convert to string, then remove bad values
-            df = df[~df[col].astype(str).isin(["#NULL!", "nan", "None", "nan", ""])]
-            df = df[df[col].notna()]
-
-    # --- SIDEBAR FILTERS ---
-    st.sidebar.title("🔍 Filter Panel")
-
+    dist_col = get_col(["District"])
     tehsil_col = get_col(["Tehsil"])
     sex_col = get_col(["S4C5", "RSex", "Gender"])
     edu_col = get_col(["S4C9", "Education", "Highest class"])
     age_col = get_col(["S4C6", "Age"])
 
-    # Helper to get clean list for dropdowns
-    def get_clean_list(column):
-        if column and column in df.columns:
-            return sorted([x for x in df[column].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", ""]])
-        return []
-
-    # 1. Province Filter
-    prov_list = get_clean_list(prov_col)
+    # Filters
+    prov_list = df[prov_col].unique().tolist() if prov_col else []
     sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list)
     
-    # 2. Age Range
     if age_col:
         min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
         sel_age = st.sidebar.slider("Age Range", min_age, max_age, (min_age, max_age))
     
-    # 3. District Filter
-    valid_districts = sorted([x for x in df[df[prov_col].isin(sel_prov)][dist_col].unique().tolist() if str(x) not in ["#NULL!", "nan", ""]]) if (sel_prov and dist_col) else []
+    valid_districts = df[df[prov_col].isin(sel_prov)][dist_col].unique().tolist() if (sel_prov and dist_col) else []
     sel_dist = st.sidebar.multiselect("District", valid_districts)
 
-    # 4. Tehsil
     if sel_dist and tehsil_col:
-        valid_tehsils = sorted([x for x in df[df[dist_col].isin(sel_dist)][tehsil_col].unique().tolist() if str(x) not in ["#NULL!", "nan", ""]])
+        valid_tehsils = df[df[dist_col].isin(sel_dist)][tehsil_col].unique().tolist()
     else:
         valid_tehsils = []
     sel_tehsil = st.sidebar.multiselect("Tehsil", valid_tehsils)
 
-    # 5. Other Filters
-    sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col))
-    sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col))
-    sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col))
+    sel_reg = st.sidebar.multiselect("Region", df[reg_col].unique().tolist()) if reg_col else []
+    sel_sex = st.sidebar.multiselect("Gender", df[sex_col].unique().tolist()) if sex_col else []
+    sel_edu = st.sidebar.multiselect("Education", df[edu_col].unique().tolist()) if edu_col else []
 
     # --- FILTER MASK ---
     mask = pd.Series(True, index=df.index)
@@ -161,9 +141,19 @@ if df is not None:
         cols_to_load = [target_q] + [c for c in [prov_col, sex_col, reg_col, dist_col, age_col] if c]
         main_data = df.loc[mask, cols_to_load]
         
-        # --- CHART DATA CLEANING (Removes NULLs from Charts) ---
+        # --- AGGRESSIVE CLEANER (Fixes the #NULL! issue) ---
+        # 1. Clean the Question Column
         main_data[target_q] = main_data[target_q].astype(str)
         main_data = main_data[~main_data[target_q].isin(["#NULL!", "nan", "None", "DK", "NR"])]
+        
+        # 2. Clean the District Column (Fixes Treemap)
+        if dist_col:
+            main_data = main_data[~main_data[dist_col].astype(str).isin(["#NULL!", "nan", "None"])]
+            
+        # 3. Clean the Province Column
+        if prov_col:
+            main_data = main_data[~main_data[prov_col].astype(str).isin(["#NULL!", "nan", "None"])]
+        # ----------------------------------------------------
         
         # Detect Top Answer
         if not main_data.empty:
@@ -288,7 +278,7 @@ if df is not None:
                 st.plotly_chart(fig5, use_container_width=True)
 
         # ==========================================================
-        # ROW 4: DISTRICT TREEMAP
+        # ROW 4: DISTRICT TREEMAP (The Heatmap)
         # ==========================================================
         st.markdown("---")
         st.subheader("🧱 District Treemap (Size vs Result)")
