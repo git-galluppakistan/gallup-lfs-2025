@@ -4,6 +4,7 @@ import plotly.express as px
 import os
 import gc
 import json
+import numpy as np
 
 # --- 1. SETUP ---
 st.set_page_config(page_title="Gallup Pakistan Dashboard", layout="wide", page_icon="📊")
@@ -21,7 +22,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Gallup Pakistan: National LFS Survey 2024-25")
+st.title("📊 Gallup Pakistan: National LFS Survey")
 
 # --- 2. OPTIMIZED DATA LOADER ---
 @st.cache_resource
@@ -33,7 +34,7 @@ def load_data_optimized():
             st.error(f"File not found: {file_name}")
             return None
 
-        # B. Chunk Load
+        # B. Chunk Load Main Data
         chunks = []
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
             for col in chunk.columns:
@@ -50,11 +51,36 @@ def load_data_optimized():
         del chunks
         gc.collect()
 
-        # C. Load Codebook
+        # --- C. THE DISTRICT INJECTOR (New Feature) ---
+        # This fixes the missing "District" column by using PCode mapping
+        map_file = "district_mapping.csv"
+        if os.path.exists(map_file):
+            # Load mapping file (PCode -> District)
+            # We use dtype=str to ensure matching works perfectly
+            map_df = pd.read_csv(map_file, dtype=str)
+            
+            # Create a lookup dictionary: { '12345': 'Lahore', '67890': 'Karachi' }
+            # We drop duplicates to make it fast
+            if "PCode" in map_df.columns and "District" in map_df.columns:
+                district_lookup = map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
+                
+                # Apply the mapping!
+                # This creates the new "District" column in your main data
+                if "PCode" in df.columns:
+                    df["District"] = df["PCode"].astype(str).map(district_lookup)
+                    # Convert to category to save memory
+                    df["District"] = df["District"].astype('category')
+                else:
+                    st.warning("⚠️ PCode column missing in main data. Cannot map Districts.")
+            else:
+                st.warning("⚠️ Mapping file must have 'PCode' and 'District' columns.")
+
+        # D. Load Codebook (Standard Labels)
         if os.path.exists("code.csv"):
             codes = pd.read_csv("code.csv")
             rename_dict = {}
             for code, label in zip(codes.iloc[:, 0], codes.iloc[:, 1]):
+                # Exclude these because we now have a REAL District column!
                 if code not in ['Province', 'District', 'Region', 'Tehsil', 'RSex', 'S4C5', 'S4C9', 'S4C6', 'Mouza', 'Locality']:
                     rename_dict[code] = f"{label} ({code})"
             df.rename(columns=rename_dict, inplace=True)
@@ -69,44 +95,68 @@ df = load_data_optimized()
 
 # --- 3. DASHBOARD LOGIC ---
 if df is not None:
-    # --- SIDEBAR FILTERS ---
-    st.sidebar.title("🔍 Filter Panel")
     
+    # --- GLOBAL DATA CLEANING ---
     def get_col(candidates):
         for c in candidates:
             for col in df.columns:
+                # Exact match priority, then partial
+                if c == col: return col
                 if c in col: return col
         return None
 
-    # Get Columns
     prov_col = get_col(["Province"])
+    dist_col = "District" # FORCE it to use our new column
     reg_col = get_col(["Region"])
-    dist_col = get_col(["District"])
+    
+    # Remove rows where key location info is missing
+    # (Clean Filters)
+    for col in [prov_col, dist_col, reg_col]:
+        if col and col in df.columns:
+            df = df[~df[col].astype(str).isin(["#NULL!", "nan", "None", "nan", ""])]
+            df = df[df[col].notna()]
+
+    # --- SIDEBAR FILTERS ---
+    st.sidebar.title("🔍 Filter Panel")
+
     tehsil_col = get_col(["Tehsil"])
     sex_col = get_col(["S4C5", "RSex", "Gender"])
     edu_col = get_col(["S4C9", "Education", "Highest class"])
     age_col = get_col(["S4C6", "Age"])
 
-    # Filters
-    prov_list = df[prov_col].unique().tolist() if prov_col else []
+    # Helper for clean dropdowns
+    def get_clean_list(column):
+        if column and column in df.columns:
+            return sorted([x for x in df[column].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", ""]])
+        return []
+
+    # 1. Province
+    prov_list = get_clean_list(prov_col)
     sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list)
     
+    # 2. Age Range
     if age_col:
         min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
         sel_age = st.sidebar.slider("Age Range", min_age, max_age, (min_age, max_age))
     
-    valid_districts = df[df[prov_col].isin(sel_prov)][dist_col].unique().tolist() if (sel_prov and dist_col) else []
+    # 3. District (Now using the REAL District names!)
+    if sel_prov and dist_col in df.columns:
+        valid_districts = sorted([x for x in df[df[prov_col].isin(sel_prov)][dist_col].unique().tolist() if str(x) not in ["#NULL!", "nan", ""]])
+    else:
+        valid_districts = []
     sel_dist = st.sidebar.multiselect("District", valid_districts)
 
+    # 4. Tehsil
     if sel_dist and tehsil_col:
-        valid_tehsils = df[df[dist_col].isin(sel_dist)][tehsil_col].unique().tolist()
+        valid_tehsils = sorted([x for x in df[df[dist_col].isin(sel_dist)][tehsil_col].unique().tolist() if str(x) not in ["#NULL!", "nan", ""]])
     else:
         valid_tehsils = []
     sel_tehsil = st.sidebar.multiselect("Tehsil", valid_tehsils)
 
-    sel_reg = st.sidebar.multiselect("Region", df[reg_col].unique().tolist()) if reg_col else []
-    sel_sex = st.sidebar.multiselect("Gender", df[sex_col].unique().tolist()) if sex_col else []
-    sel_edu = st.sidebar.multiselect("Education", df[edu_col].unique().tolist()) if edu_col else []
+    # 5. Other Filters
+    sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col))
+    sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col))
+    sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col))
 
     # --- FILTER MASK ---
     mask = pd.Series(True, index=df.index)
@@ -132,7 +182,7 @@ if df is not None:
     ignore = [prov_col, reg_col, sex_col, dist_col, tehsil_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode"]
     questions = [c for c in df.columns if c not in ignore]
     
-    default_target = "Marital Status (S4C7)"
+    default_target = "Marital status (S4C7)"
     default_index = questions.index(default_target) if default_target in questions else 0
     target_q = st.selectbox("Select Question to Analyze:", questions, index=default_index)
 
@@ -141,21 +191,10 @@ if df is not None:
         cols_to_load = [target_q] + [c for c in [prov_col, sex_col, reg_col, dist_col, age_col] if c]
         main_data = df.loc[mask, cols_to_load]
         
-        # --- AGGRESSIVE CLEANER (Fixes the #NULL! issue) ---
-        # 1. Clean the Question Column
+        # --- CHART CLEANING ---
         main_data[target_q] = main_data[target_q].astype(str)
         main_data = main_data[~main_data[target_q].isin(["#NULL!", "nan", "None", "DK", "NR"])]
         
-        # 2. Clean the District Column (Fixes Treemap)
-        if dist_col:
-            main_data = main_data[~main_data[dist_col].astype(str).isin(["#NULL!", "nan", "None"])]
-            
-        # 3. Clean the Province Column
-        if prov_col:
-            main_data = main_data[~main_data[prov_col].astype(str).isin(["#NULL!", "nan", "None"])]
-        # ----------------------------------------------------
-        
-        # Detect Top Answer
         if not main_data.empty:
             top_ans = main_data[target_q].mode()[0]
         else:
@@ -170,11 +209,12 @@ if df is not None:
         
         geojson_path = "pakistan_districts.geojson"
         
-        if os.path.exists(geojson_path) and dist_col:
+        # Check if we have the mapped District column
+        if os.path.exists(geojson_path) and dist_col in main_data.columns:
             with open(geojson_path) as f:
                 pak_geojson = json.load(f)
             
-            # Karachi Grouping
+            # Karachi Grouping (Still needed if Map treats Karachi as one)
             merge_map = {
                 "KARACHI CENTRAL": "KARACHI", "KARACHI EAST": "KARACHI",
                 "KARACHI SOUTH": "KARACHI", "KARACHI WEST": "KARACHI",
@@ -182,7 +222,8 @@ if df is not None:
                 "EAST": "KARACHI", "WEST": "KARACHI"
             }
             map_df = main_data.copy()
-            map_df["Map_District"] = map_df[dist_col].replace(merge_map)
+            # Ensure District column is string for replacing
+            map_df["Map_District"] = map_df[dist_col].astype(str).replace(merge_map)
             
             dist_stats = pd.crosstab(map_df["Map_District"], map_df[target_q], normalize='index') * 100
             
@@ -204,7 +245,7 @@ if df is not None:
             else:
                 st.warning("Not enough data to map.")
         else:
-            st.warning("⚠️ Map file missing or District column not found.")
+            st.warning("⚠️ Map file missing or District column not loaded.")
 
         # ==========================================================
         # ROW 2: STANDARD CHARTS
@@ -284,7 +325,7 @@ if df is not None:
         st.subheader("🧱 District Treemap (Size vs Result)")
         st.caption(f"**Size** = Respondent Volume | **Color** = % answering '{top_ans}' (Yellow = High)")
         
-        if dist_col:
+        if dist_col in main_data.columns:
             # Treemap uses raw ungrouped districts
             top_10 = main_data[dist_col].value_counts().head(15).index.tolist()
             subset = main_data[main_data[dist_col].isin(top_10)]
@@ -319,7 +360,7 @@ if df is not None:
             
         with t2:
             st.subheader(f"🏘️ District Rankings (Top % {top_ans})")
-            if dist_col:
+            if dist_col in main_data.columns:
                 dist_pivot = pd.crosstab(main_data[dist_col], main_data[target_q], normalize='index') * 100
                 if not dist_pivot.empty:
                     dist_pivot = dist_pivot.sort_values(by=top_ans, ascending=False).head(50)
@@ -328,4 +369,3 @@ if df is not None:
 
 else:
     st.info("Awaiting Data...")
-
