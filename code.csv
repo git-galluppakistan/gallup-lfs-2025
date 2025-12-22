@@ -1,0 +1,167 @@
+﻿variable name,variable label
+PCode,Processing Code
+EBCode,BLOCK
+HHNo,HHNo
+Province,Province
+Region,Region
+Fstatus,Fstatus
+SNo,S.No
+S4C3,Reltionship with Head of Household
+S4C2,Name of Houshold Member
+S4C4,Present Status
+S4C5,Gender
+S4C6,Age
+S4C7,Marital Status
+S4C81,Can Read Simple Statement with Understanding
+S4C82,Can Write Simple Statement with Understanding
+S4C9,Education Level
+S4C10,Current Enrollment
+S4C11,Ever received or currently receiving any training
+S4C12,Type of Training
+S4C13,Duration of training in weeks
+S4C14,Provider of training
+S4C15,Duration of living in current district
+S4C16,Previous District of living
+S4C17,Previous residence located in rural/urban area
+S4C18,Reason of Migration
+S5C1,Work for pay or wage
+S5C2,Run any kind of business/agri farm
+S5C3,Help to work in fmaily farm/business
+S5C4,Not work last week and have paid job or business
+S5C5,Why.. not work last week
+S5C6,When will return to the main job
+S5C7,...Receive income from Job/Business in duration of abasence
+S5C8,Last week Did you work in...
+S5C9,was this work you mentioned in...
+S5C10,products intended for
+S5C11,Status of Employment
+S5C12,Major Occuption
+S5C13,Major industry
+S5C14a,Activity performed physical/Online
+S5C14b,Digital platform used
+S5C15,Kind of Establishment
+S5C16,Business Registered in
+S5C17,Kind of records keeps
+S5C18,Person engaged in businees/enterprise
+S5C19,Business hire any regular paid employee
+S5C20,Member of any Association
+S5C21,Where carry out the work
+S5C22,Location of work
+S5C23,Time to reach work place
+S5C24,Actual Hours work
+S5C25,Any subsidary work or not
+S5C26,Subsidary Status of Employment
+S5C27,Subsidary Occuption
+S5C28,Subsidary industry
+S5C29a,Subsidary Activity performed physical/Online
+S5C29b,Subsidary Digital platform used
+S5C30,Subsidary Kind of Establishment
+S5C31,Subsidary Business Registered in
+S5C32,Subsidary Business Kind of records keeps
+S5C33,Subsidary Person engaged in businees/enterprise
+S5C34,Subsidary Business hire any regular paid employee
+S5C35,Susidary Hours Work
+S5C36,Additional work other than subisdary
+S5C37,Nature of Activity did one year ago
+S6C1,Why worked less than 35 hours
+S6C2,Want to work more hours
+S6C3,In last 4 weeks did looks for any additional work
+S6C4,Could start additional work in next two weeks
+S6C5,Does you want to change current employment situtation
+S6C6,Reason why to change employment situation
+S7C1,Status of job/Work
+S7C2,Periodicity of Payment
+S7C31,Net money earn in Cash in last week
+S7C32,Net money earn in in kind in last week
+S7C33,Net money earn in Total in last week
+S7C41,Net money earn in Cash in las month
+S7C42,Net money earn in kind in last month
+S7C43,Net money earn in total in last month
+S7C51,Net money in bousnes in cash in last year
+S7C52,Net money in bousnes in Kind in last year
+S7C53,Net money in bousnes in Total in last year
+S7C61,Old age Pension.
+S7C62,Family support in case of death of bread winner
+S7C63,Fee reimbursement/education stipend
+S7C64,Disability Insurance/Social Insurance
+S7C65,Medical facilities
+S7C66,Marrage Grant
+S7C67,Child Stipend
+S7C68,None
+S7C7,Does... get paid annual leave
+S7C8,Does.... get Paid Sick leave
+S7C9,Net money earn during last year
+S8C1,"In past 12months, did.. suffer from injury"
+S8C21,Main cause of 1st injury
+S8C22,Main cause of 2nd Injury
+S8C23,Main cause of 3rd injury
+S8C3,How many days been away from work
+S8C4,Did.. return to the same job
+S8C5,Did.. received medical treatment for the injury
+S8C6,Did... receive anu injury compensation
+S9C1,Was looking for work during last 4-weeks
+S9C21,Applied to prospective employer
+S9C22,Take a test or interview
+S9C23,Post/Update resume or professional/social networking sites
+S9C24,"Checked at work sites, farms, factories, markets, etc."
+S9C25,"Applied for permit or license to set up own enterprise such as a shop, business, farm, or service establishment (fixed or mobile)"
+S9C26,"Looked for land, building, machinery or equipment for setting up own enterprise such as shop, business, farm, service establishment (fixed or mobile)"
+S9C27,Sought assistance from friends or relatives
+S9C28,Placed or answered advertisements
+S9C29,Registered with Government employment agency
+S9C210,Registered with Private Employment Agency
+S9C211,Arranged for financial resources
+S9C212,Applied for loan/credit
+S9C213,Other (Specify)
+S9C3,How long was being looking for work
+S9C4,At present does want to work for pay or start a business
+S9C5,Reasons why did not try to find paid job or start business
+S9C6,Could start work within next 2 weeks
+S9C7,Type of work would prefer to do
+S9C8,Where would you willing to work
+S9C9,Why not available to start work within next two weeks
+S9C10,Registered with private employment agency
+S9C11,How long ago you stop working
+S9C12,Main Occuption
+S9C13,Main Industry
+S9C14,Worked as....
+S9C15,For how many years been doing this sort of work
+S9C16,Main reasons for leaving the last job/business
+S9C17,Does receive any of the following benifts
+S9C171,Old age benefit
+S9C172,Desability benefits
+S9C173,Unemployment Benefit
+S9C174,Child Stipend
+S9C175,BISP
+S9C176,Sehat Card
+S9C177,Other
+S9C178,None
+S10C10.1a,Work or help in agricultural operations
+S10C10.1b,Hours
+S10C10.2a,Work or help in livestock operations
+S10C10.2b,Hours
+S10C10.3a,Work or help poultry raising
+S10C10.3b,Hours
+S10C10.4a,Gather wild food
+S10C10.4b,Hours
+S10C10.5a,Fishing or hunting
+S10C10.5b,Hours
+S10C10.6a,Prepare preserved food or drinks for storage
+S10C10.6b,Hours
+S10C10.7a,"Construction work to build, renovate or extend the family home or help a family member with similar work"
+S10C10.7b,Hours
+S10C10.8a,Spend any time making goods for use by your household or family
+S10C10.8b,Hours
+S10C10.9a,Fetch water from natural or public sources
+S10C10.9b,Hours
+S10C10.10a,Collect any firewood
+S10C10.10b,Hours
+S10C10.11a,Spend time in caring for children or health care of ill/aged persons
+S10C10.11b,Hours
+S10C10.12a,Spend time in helping children do homework or other educating activities
+S10C10.12b,Hours
+S10C10.13a,"Spend time in cleaning and arranging the house, washing, cooking, mending or pressing clothes"
+S10C10.13b,Hours
+S10C10.14a,Spend time in other services activities.
+S10C10.14b,Hours
+Weights,
