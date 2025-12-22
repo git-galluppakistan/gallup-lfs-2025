@@ -22,7 +22,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Gallup Pakistan: National LFS Survey 2024-25")
+st.title("📊 Gallup Pakistan: National LFS Survey")
 
 # --- 2. OPTIMIZED DATA LOADER ---
 @st.cache_resource
@@ -34,7 +34,7 @@ def load_data_optimized():
             st.error(f"File not found: {file_name}")
             return None
 
-        # B. Chunk Load Main Data
+        # B. Chunk Load
         chunks = []
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
             for col in chunk.columns:
@@ -51,36 +51,40 @@ def load_data_optimized():
         del chunks
         gc.collect()
 
-        # --- C. THE DISTRICT INJECTOR (New Feature) ---
-        # This fixes the missing "District" column by using PCode mapping
+        # --- C. THE DISTRICT INJECTOR ---
         map_file = "district_mapping.csv"
         if os.path.exists(map_file):
-            # Load mapping file (PCode -> District)
-            # We use dtype=str to ensure matching works perfectly
             map_df = pd.read_csv(map_file, dtype=str)
             
-            # Create a lookup dictionary: { '12345': 'Lahore', '67890': 'Karachi' }
-            # We drop duplicates to make it fast
             if "PCode" in map_df.columns and "District" in map_df.columns:
                 district_lookup = map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
                 
-                # Apply the mapping!
-                # This creates the new "District" column in your main data
                 if "PCode" in df.columns:
-                    df["District"] = df["PCode"].astype(str).map(district_lookup)
-                    # Convert to category to save memory
+                    # Map Districts, but fill Missing values with "Unknown" instead of NaN
+                    df["District"] = df["PCode"].astype(str).map(district_lookup).fillna("Unknown")
                     df["District"] = df["District"].astype('category')
                 else:
-                    st.warning("⚠️ PCode column missing in main data. Cannot map Districts.")
-            else:
-                st.warning("⚠️ Mapping file must have 'PCode' and 'District' columns.")
+                    st.warning("⚠️ PCode column missing in main data.")
+        else:
+            # If mapping missing, create placeholder
+            df["District"] = "Unknown"
 
-        # D. Load Codebook (Standard Labels)
+        # --- D. SPELLING FIXER (Balochistan) ---
+        # Auto-correct common spelling issues in the data
+        for col in df.columns:
+            if "Province" in col:
+                df[col] = df[col].astype(str).replace({
+                    "BALOUCHISTAN": "Balochistan",
+                    "Balouchistan": "Balochistan",
+                    "KP": "Khyber Pakhtunkhwa",
+                    "KPK": "Khyber Pakhtunkhwa"
+                }).astype("category")
+
+        # E. Load Codebook
         if os.path.exists("code.csv"):
             codes = pd.read_csv("code.csv")
             rename_dict = {}
             for code, label in zip(codes.iloc[:, 0], codes.iloc[:, 1]):
-                # Exclude these because we now have a REAL District column!
                 if code not in ['Province', 'District', 'Region', 'Tehsil', 'RSex', 'S4C5', 'S4C9', 'S4C6', 'Mouza', 'Locality']:
                     rename_dict[code] = f"{label} ({code})"
             df.rename(columns=rename_dict, inplace=True)
@@ -100,21 +104,19 @@ if df is not None:
     def get_col(candidates):
         for c in candidates:
             for col in df.columns:
-                # Exact match priority, then partial
                 if c == col: return col
                 if c in col: return col
         return None
 
     prov_col = get_col(["Province"])
-    dist_col = "District" # FORCE it to use our new column
+    dist_col = "District"
     reg_col = get_col(["Region"])
     
-    # Remove rows where key location info is missing
-    # (Clean Filters)
-    for col in [prov_col, dist_col, reg_col]:
+    # Remove ONLY strictly bad rows (Empty/Null)
+    # Important: We DO NOT remove "Unknown" districts anymore, so Province data stays visible.
+    for col in [prov_col, reg_col]:
         if col and col in df.columns:
             df = df[~df[col].astype(str).isin(["#NULL!", "nan", "None", "nan", ""])]
-            df = df[df[col].notna()]
 
     # --- SIDEBAR FILTERS ---
     st.sidebar.title("🔍 Filter Panel")
@@ -124,7 +126,6 @@ if df is not None:
     edu_col = get_col(["S4C9", "Education", "Highest class"])
     age_col = get_col(["S4C6", "Age"])
 
-    # Helper for clean dropdowns
     def get_clean_list(column):
         if column and column in df.columns:
             return sorted([x for x in df[column].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", ""]])
@@ -139,7 +140,7 @@ if df is not None:
         min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
         sel_age = st.sidebar.slider("Age Range", min_age, max_age, (min_age, max_age))
     
-    # 3. District (Now using the REAL District names!)
+    # 3. District
     if sel_prov and dist_col in df.columns:
         valid_districts = sorted([x for x in df[df[prov_col].isin(sel_prov)][dist_col].unique().tolist() if str(x) not in ["#NULL!", "nan", ""]])
     else:
@@ -179,10 +180,10 @@ if df is not None:
     st.markdown("---")
 
     # --- MAIN QUESTION SELECTION ---
-    ignore = [prov_col, reg_col, sex_col, dist_col, tehsil_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode"]
+    ignore = [prov_col, reg_col, sex_col, dist_col, tehsil_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode", "District"]
     questions = [c for c in df.columns if c not in ignore]
     
-    default_target = "Marital Status (S4C7)"
+    default_target = "Marital status (S4C7)"
     default_index = questions.index(default_target) if default_target in questions else 0
     target_q = st.selectbox("Select Question to Analyze:", questions, index=default_index)
 
@@ -214,7 +215,7 @@ if df is not None:
             with open(geojson_path) as f:
                 pak_geojson = json.load(f)
             
-            # Karachi Grouping (Still needed if Map treats Karachi as one)
+            # Karachi Grouping
             merge_map = {
                 "KARACHI CENTRAL": "KARACHI", "KARACHI EAST": "KARACHI",
                 "KARACHI SOUTH": "KARACHI", "KARACHI WEST": "KARACHI",
@@ -369,4 +370,3 @@ if df is not None:
 
 else:
     st.info("Awaiting Data...")
-
