@@ -112,19 +112,15 @@ try:
         with c1:
             st.subheader("Employment to Population Ratio")
             
-            # --- FIX: REORDERED & COLORED ---
+            # --- FIX: REVERTED COLORS TO PRISM (User Preference) ---
             emp_pop_data = pd.DataFrame({
                 "Province": ["Pakistan (Avg)", "Punjab", "Sindh", "Balochistan", "KP"],
-                "Ratio": [43.0, 45.4, 42.3, 39.3, 37.2],
-                "Color": ["#d62728", "#1f77b4", "#1f77b4", "#1f77b4", "#1f77b4"] # Red for Pakistan, Blue for others
+                "Ratio": [43.0, 45.4, 42.3, 39.3, 37.2]
             })
             
             fig_ep = px.bar(emp_pop_data, x="Province", y="Ratio", text="Ratio",
                             color="Province", 
-                            color_discrete_sequence=["#d62728", "#1f77b4", "#1f77b4", "#1f77b4", "#1f77b4"])
-            
-            # Force color mapping manually to ensure Pakistan is Red
-            fig_ep.update_traces(marker_color=emp_pop_data["Color"]) 
+                            color_discrete_sequence=px.colors.qualitative.Prism) # <--- Back to Prism
             
             fig_ep.update_traces(texttemplate='%{text}%', textposition='outside')
             fig_ep.update_layout(yaxis_range=[0, 60], showlegend=False)
@@ -140,16 +136,14 @@ try:
                                color_discrete_sequence=px.colors.qualitative.Pastel)
             st.plotly_chart(fig_rates, use_container_width=True)
 
-        # --- INDUSTRY SECTION (FIXED) ---
+        # --- INDUSTRY SECTION (FIXED RANKING) ---
         st.subheader("🏢 Employment by Major Industry")
         
-        # Corrected Data: Manufacturing is 2nd
         ind_data = pd.DataFrame({
             "Industry": ["Agriculture", "Manufacturing", "Wholesale & Retail", "Construction", "Transport", "Other"],
             "Share": [40.0, 25.4, 16.0, 11.0, 6.6, 1.0] 
         })
         
-        # Sort for Chart
         ind_data = ind_data.sort_values(by="Share", ascending=True)
 
         fig_ind = px.bar(ind_data, x="Share", y="Industry", orientation='h', text="Share",
@@ -158,7 +152,7 @@ try:
         fig_ind.update_layout(xaxis_range=[0, 50], height=400)
         st.plotly_chart(fig_ind, use_container_width=True)
         
-        # Corrected Text Below Chart
+        # Text Below Chart
         st.info("**Key Insight:** Manufacturing is the 2nd largest employer (25.4%), followed by Wholesale & Retail Trade (16.0%).")
 
     # ==============================================================================
@@ -217,7 +211,7 @@ try:
             # --- QUESTION SELECTOR ---
             ignore = [prov_col, reg_col, sex_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode"]
             questions = [c for c in df.columns if c not in ignore]
-            default_target = "Marital status (S4C7)"
+            default_target = "Marital Status (S4C7)"
             target_q = st.selectbox("Select Variable to Analyze:", questions, 
                                   index=questions.index(default_target) if default_target in questions else 0)
 
@@ -291,11 +285,10 @@ try:
                         if prov_col:
                             prov_grp = main_data.groupby([prov_col, target_q], observed=True).size().reset_index(name='Count')
                             
-                            # --- FIX: PERCENTAGE CALCULATION ---
+                            # --- FIX: STACKED PERCENTAGE ---
                             prov_totals = prov_grp.groupby(prov_col, observed=True)['Count'].transform('sum')
                             prov_grp['%'] = (prov_grp['Count'] / prov_totals * 100).fillna(0)
                             
-                            # Use % on Y-axis
                             fig_prov = px.bar(prov_grp, x=prov_col, y="%", color=target_q, barmode="stack")
                             fig_prov.update_layout(showlegend=False, yaxis_title="%")
                             st.plotly_chart(fig_prov, use_container_width=True)
@@ -307,7 +300,7 @@ try:
                             g_counts.columns = ["Gender", "Count"]
                             fig_pie = px.pie(g_counts, names="Gender", values="Count", hole=0.5)
                             
-                            # --- FIX: SHOW LEGEND ---
+                            # --- FIX: LEGEND ON ---
                             fig_pie.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.1))
                             st.plotly_chart(fig_pie, use_container_width=True)
 
