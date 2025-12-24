@@ -112,7 +112,7 @@ try:
         with c1:
             st.subheader("Employment to Population Ratio")
             
-            # --- FIX: REVERTED COLORS TO PRISM (User Preference) ---
+            # --- FIX: REVERTED COLORS TO PRISM ---
             emp_pop_data = pd.DataFrame({
                 "Province": ["Pakistan (Avg)", "Punjab", "Sindh", "Balochistan", "KP"],
                 "Ratio": [43.0, 45.4, 42.3, 39.3, 37.2]
@@ -120,7 +120,7 @@ try:
             
             fig_ep = px.bar(emp_pop_data, x="Province", y="Ratio", text="Ratio",
                             color="Province", 
-                            color_discrete_sequence=px.colors.qualitative.Prism) # <--- Back to Prism
+                            color_discrete_sequence=px.colors.qualitative.Prism)
             
             fig_ep.update_traces(texttemplate='%{text}%', textposition='outside')
             fig_ep.update_layout(yaxis_range=[0, 60], showlegend=False)
@@ -152,7 +152,6 @@ try:
         fig_ind.update_layout(xaxis_range=[0, 50], height=400)
         st.plotly_chart(fig_ind, use_container_width=True)
         
-        # Text Below Chart
         st.info("**Key Insight:** Manufacturing is the 2nd largest employer (25.4%), followed by Wholesale & Retail Trade (16.0%).")
 
     # ==============================================================================
@@ -320,17 +319,24 @@ try:
                         st.markdown("**📈 Age Trends (%)**")
                         if age_col:
                             chart_data = main_data.copy()
+                            # --- CUSTOM AGE GROUPS (SORT ORDER ENFORCED) ---
                             bins = [0, 4, 5, 9, 12, 15, 18, 24, 30, 40, 50, 60, 65, 200]
                             labels = ['0-4', '4-5', '5-9', '9-12', '12-15', '15-18', '18-24', '25-30', '30-40', '40-50', '50-60', '60-65', '65+']
                             
+                            # Create Categorical Column with Strict Order
                             chart_data['AgeGrp'] = pd.cut(chart_data[age_col], bins=bins, labels=labels, right=False)
                             
                             age_grp = chart_data.groupby(['AgeGrp', target_q], observed=True).size().reset_index(name='Count')
                             age_totals = age_grp.groupby('AgeGrp', observed=True)['Count'].transform('sum')
                             age_grp['%'] = (age_grp['Count'] / age_totals * 100).fillna(0)
                             
-                            fig_age = px.area(age_grp, x="AgeGrp", y="%", color=target_q, markers=True)
-                            fig_age.update_xaxes(type='category')
+                            # Explicitly Force Sort Order
+                            age_grp['AgeGrp'] = pd.Categorical(age_grp['AgeGrp'], categories=labels, ordered=True)
+                            age_grp = age_grp.sort_values('AgeGrp')
+                            
+                            fig_age = px.area(age_grp, x="AgeGrp", y="%", color=target_q, markers=True,
+                                            category_orders={"AgeGrp": labels}) # Forces Plotly Order
+                            fig_age.update_xaxes(type='category') 
                             st.plotly_chart(fig_age, use_container_width=True)
 
                     # 4. TABLES
