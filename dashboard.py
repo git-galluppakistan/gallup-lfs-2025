@@ -31,18 +31,16 @@ st.markdown("""
 
 st.title("📊 Gallup Pakistan: Labour Force Survey 2024-25")
 
-# --- 2. SAFE DATA LOADER (With Error Printing) ---
+# --- 2. SAFE DATA LOADER ---
 @st.cache_data
 def load_data_optimized():
     try:
-        # Check for files (Capital or Lowercase)
         file_name = "data.zip" if os.path.exists("data.zip") else "Data.zip"
         
         if not os.path.exists(file_name):
-            return None # Return None silently if file missing
+            return None
 
         chunks = []
-        # Try loading
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
             for col in chunk.columns:
                 chunk[col] = chunk[col].astype('category')
@@ -59,7 +57,8 @@ def load_data_optimized():
         del chunks
         gc.collect()
 
-        # Province Standardization
+        # --- PROVINCE NAME STANDARDIZATION (Critical for Map) ---
+        # Maps your Data Labels -> GeoJSON Labels
         province_map = {
             "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
             "BALOUCHISTAN": "Balochistan", "Balouchistan": "Balochistan",
@@ -85,11 +84,9 @@ def load_data_optimized():
         return df
 
     except Exception as e:
-        # This will print the exact error to the dashboard so you can tell me
         st.error(f"⚠️ Data Loading Error: {e}")
         return None
 
-# Load Data
 df = load_data_optimized()
 
 # --- 3. DASHBOARD TABS ---
@@ -103,7 +100,6 @@ try:
         st.markdown("### 📌 Key Findings: Labour Force Survey 2024-25")
         st.caption("Source: Official Key Insights Report")
         
-        # KPIS
         kpi1, kpi2, kpi3, kpi4 = st.columns(4)
         kpi1.metric("Total Labour Force", "83.1 Million", "2024-25")
         kpi2.metric("Employed", "77.2 Million", "92.9% of LF")
@@ -112,12 +108,9 @@ try:
 
         st.markdown("---")
 
-        # CHARTS
         c1, c2 = st.columns(2)
-        
         with c1:
             st.subheader("Employment to Population Ratio")
-            st.caption("Percentage of population that is employed (By Province)")
             emp_pop_data = pd.DataFrame({
                 "Province": ["Punjab", "Pakistan (Avg)", "Sindh", "Balochistan", "KP"],
                 "Ratio": [45.4, 43.0, 42.3, 39.3, 37.2]
@@ -130,7 +123,6 @@ try:
 
         with c2:
             st.subheader("Key Labour Force Metrics")
-            st.caption("Comparison of Rates (%)")
             rates_data = pd.DataFrame({
                 "Metric": ["Participation Rate", "Employment Rate", "Unemployment Rate"],
                 "Value": [44.7, 92.9, 7.1]
@@ -139,7 +131,6 @@ try:
                                color_discrete_sequence=px.colors.qualitative.Pastel)
             st.plotly_chart(fig_rates, use_container_width=True)
 
-        # INDUSTRY
         st.subheader("🏢 Employment by Major Industry")
         ind_col1, ind_col2 = st.columns([2, 1])
         with ind_col1:
@@ -171,12 +162,11 @@ try:
 
             prov_col = get_col(["Province"])
             reg_col = get_col(["Region"])
+            sex_col = get_col(["S4C5", "RSex", "Gender"])
+            age_col = get_col(["S4C6", "Age"])
             
             # FILTERS
             st.sidebar.markdown("## 🔍 Data Explorer Filters")
-            sex_col = get_col(["S4C5", "RSex", "Gender"])
-            age_col = get_col(["S4C6", "Age"])
-
             def get_clean_list(column):
                 if column and column in df.columns:
                     return sorted([x for x in df[column].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown"]])
@@ -198,11 +188,10 @@ try:
             if sel_reg: mask = mask & df[reg_col].isin(sel_reg)
             if sel_sex: mask = mask & df[sex_col].isin(sel_sex)
             
-            # DASHBOARD
+            # DASHBOARD BODY
             c1, c2 = st.columns(2)
             c1.metric("Filtered Database", f"{mask.sum():,.0f}")
             c2.metric("Total Records", f"{len(df):,.0f}")
-            
             st.markdown("---")
             
             ignore = [prov_col, reg_col, sex_col, age_col, "Mouza", "Locality", "PCode", "EBCode"]
@@ -220,24 +209,39 @@ try:
                 if not main_data.empty:
                     top_ans = main_data[target_q].mode()[0]
                     
+                    # --- MAP SECTION ---
                     st.subheader(f"🗺️ Province Heatmap: {top_ans}")
                     geojson_path = "pakistan_districts.geojson"
+                    
                     if os.path.exists(geojson_path) and prov_col:
                         with open(geojson_path) as f: pak_geojson = json.load(f)
+                        
+                        # Calculate Province Stats
                         prov_stats = pd.crosstab(main_data[prov_col], main_data[target_q], normalize='index') * 100
+                        
                         if top_ans in prov_stats.columns:
                             map_data = prov_stats[[top_ans]].reset_index()
                             map_data.columns = ["Province", "Percent"]
+                            
+                            # DRAW MAP (The Fix is marker_line_width=0)
                             fig_map = px.choropleth_mapbox(
-                                map_data, geojson=pak_geojson, locations="Province",
-                                featureidkey="properties.province_territory",
-                                color="Percent", color_continuous_scale="Spectral_r",
-                                mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
+                                map_data, 
+                                geojson=pak_geojson, 
+                                locations="Province",
+                                featureidkey="properties.province_territory", # Use District File, but Map to Province Key
+                                color="Percent", 
+                                color_continuous_scale="Spectral_r",
+                                mapbox_style="carto-positron", 
+                                zoom=4.5, 
+                                center={"lat": 30.3753, "lon": 69.3451},
                                 opacity=0.7
                             )
+                            # This removes the district grid lines, merging them into a solid block!
+                            fig_map.update_traces(marker_line_width=0)
                             fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=500)
                             st.plotly_chart(fig_map, use_container_width=True)
 
+                    # --- CHARTS SECTION ---
                     mc1, mc2 = st.columns(2)
                     with mc1:
                         st.markdown("**📊 Result Distribution**")
@@ -259,4 +263,3 @@ try:
 
 except Exception as e:
     st.error(f"🚨 Critical Dashboard Error: {e}")
-
