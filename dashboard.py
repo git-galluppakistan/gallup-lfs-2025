@@ -148,7 +148,7 @@ try:
             st.info("**Key Insight:** Wholesale & Retail Trade is the 2nd largest employer after Agriculture.")
 
     # ==============================================================================
-    # TAB 2: DATA EXPLORER (CUSTOM AGE GROUPS)
+    # TAB 2: DATA EXPLORER
     # ==============================================================================
     with tab2:
         if df is not None:
@@ -203,7 +203,7 @@ try:
             # --- QUESTION SELECTOR ---
             ignore = [prov_col, reg_col, sex_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode"]
             questions = [c for c in df.columns if c not in ignore]
-            default_target = "Marital Status (S4C7)"
+            default_target = "Marital status (S4C7)"
             target_q = st.selectbox("Select Variable to Analyze:", questions, 
                                   index=questions.index(default_target) if default_target in questions else 0)
 
@@ -250,7 +250,8 @@ try:
                             if not label_data.empty:
                                 fig_map.add_trace(go.Scattermapbox(
                                     lat=label_data["Lat"], lon=label_data["Lon"], mode='text',
-                                    text=label_data.apply(lambda x: f"<b>{x['Percent']:.1f}%</b>", axis=1),
+                                    # REMOVED HTML BOLD TAGS HERE for clean map
+                                    text=label_data.apply(lambda x: f"{x['Percent']:.1f}%", axis=1),
                                     textfont=dict(size=14, color='black'), showlegend=False, hoverinfo='none'
                                 ))
 
@@ -289,7 +290,7 @@ try:
                             fig_pie.update_layout(showlegend=False)
                             st.plotly_chart(fig_pie, use_container_width=True)
 
-                    # 3. CHARTS ROW 2 (Updated Age Logic)
+                    # 3. CHARTS ROW 2
                     col4, col5 = st.columns([1, 1.5])
 
                     with col4:
@@ -304,13 +305,12 @@ try:
                     with col5:
                         st.markdown("**📈 Age Trends (%)**")
                         if age_col:
-                            # --- CUSTOM AGE GROUP LOGIC ---
                             chart_data = main_data.copy()
-                            # Updated bins and labels as requested
+                            # FIXED BINS EXACTLY AS REQUESTED
                             bins = [0, 4, 5, 9, 12, 15, 18, 24, 30, 40, 50, 60, 65, 200]
                             labels = ['0-4', '4-5', '5-9', '9-12', '12-15', '15-18', '18-24', '25-30', '30-40', '40-50', '50-60', '60-65', '65+']
                             
-                            chart_data['AgeGrp'] = pd.cut(chart_data[age_col], bins=bins, labels=labels, include_lowest=True)
+                            chart_data['AgeGrp'] = pd.cut(chart_data[age_col], bins=bins, labels=labels, right=False)
                             
                             age_grp = chart_data.groupby(['AgeGrp', target_q], observed=True).size().reset_index(name='Count')
                             age_totals = age_grp.groupby('AgeGrp', observed=True)['Count'].transform('sum')
@@ -341,4 +341,3 @@ try:
 
 except Exception as e:
     st.error(f"🚨 Critical Dashboard Error: {e}")
-
