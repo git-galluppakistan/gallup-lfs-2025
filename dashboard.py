@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import os
 import gc
 import json
@@ -58,7 +59,6 @@ def load_data_optimized():
         gc.collect()
 
         # --- PROVINCE NAME STANDARDIZATION ---
-        # Matches Data -> New GeoJSON Keys (Standard Names)
         province_map = {
             "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
             "BALOUCHISTAN": "Balochistan", "Balouchistan": "Balochistan",
@@ -196,7 +196,7 @@ try:
             
             ignore = [prov_col, reg_col, sex_col, age_col, "Mouza", "Locality", "PCode", "EBCode"]
             questions = [c for c in df.columns if c not in ignore]
-            default_target = "Marital Status (S4C7)"
+            default_target = "Marital status (S4C7)"
             target_q = st.selectbox("Select Variable to Analyze:", questions, 
                                   index=questions.index(default_target) if default_target in questions else 0)
 
@@ -209,26 +209,26 @@ try:
                 if not main_data.empty:
                     top_ans = main_data[target_q].mode()[0]
                     
-                    # --- NEW PROVINCE MAP SECTION ---
+                    # --- MAP SECTION (WITH LABELS) ---
                     st.subheader(f"🗺️ Province Heatmap: {top_ans}")
-                    geojson_path = "pakistan_provinces.geojson" # UPDATED FILENAME
+                    geojson_path = "pakistan_provinces.geojson"
                     
                     if os.path.exists(geojson_path) and prov_col:
                         with open(geojson_path) as f: pak_geojson = json.load(f)
                         
-                        # Calculate Province Stats
+                        # 1. Calculate Stats
                         prov_stats = pd.crosstab(main_data[prov_col], main_data[target_q], normalize='index') * 100
                         
                         if top_ans in prov_stats.columns:
                             map_data = prov_stats[[top_ans]].reset_index()
                             map_data.columns = ["Province", "Percent"]
                             
-                            # DRAW MAP (Simple & Clean)
+                            # 2. Draw Base Map (Polygons)
                             fig_map = px.choropleth_mapbox(
                                 map_data, 
                                 geojson=pak_geojson, 
                                 locations="Province",
-                                featureidkey="properties.shapeName", # KEY MIGHT VARY, BUT 'shapeName' or 'name' is standard for ADM1
+                                featureidkey="properties.shapeName", # Adjust if using different GeoJSON
                                 color="Percent", 
                                 color_continuous_scale="Spectral_r",
                                 mapbox_style="carto-positron", 
@@ -236,10 +236,37 @@ try:
                                 center={"lat": 30.3753, "lon": 69.3451},
                                 opacity=0.7
                             )
+                            
+                            # 3. Add Text Labels Layer
+                            # We hardcode centroids for clean display
+                            centroids = pd.DataFrame([
+                                {"Province": "Punjab", "Lat": 30.8, "Lon": 72.5},
+                                {"Province": "Sindh", "Lat": 26.0, "Lon": 68.5},
+                                {"Province": "Balochistan", "Lat": 28.5, "Lon": 65.5},
+                                {"Province": "Khyber Pakhtunkhwa", "Lat": 34.5, "Lon": 72.0},
+                                {"Province": "Gilgit-Baltistan", "Lat": 35.8, "Lon": 74.5},
+                                {"Province": "Azad Jammu & Kashmir", "Lat": 34.0, "Lon": 73.8},
+                                {"Province": "Islamabad Capital Territory", "Lat": 33.7, "Lon": 73.1}
+                            ])
+                            
+                            # Merge stats with centroids to get the value for the label
+                            label_data = pd.merge(centroids, map_data, on="Province", how="inner")
+                            
+                            if not label_data.empty:
+                                fig_map.add_trace(go.Scattermapbox(
+                                    lat=label_data["Lat"],
+                                    lon=label_data["Lon"],
+                                    mode='text',
+                                    text=label_data.apply(lambda x: f"<b>{x['Percent']:.1f}%</b>", axis=1),
+                                    textfont=dict(size=14, color='black'),
+                                    showlegend=False,
+                                    hoverinfo='none'
+                                ))
+
                             fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=500)
                             st.plotly_chart(fig_map, use_container_width=True)
                     else:
-                         st.warning("⚠️ Please upload 'pakistan_provinces.geojson' to see the map.")
+                         st.warning("⚠️ Map file missing. Please ensure 'pakistan_provinces.geojson' is uploaded.")
 
                     # --- CHARTS ---
                     mc1, mc2 = st.columns(2)
