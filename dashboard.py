@@ -58,7 +58,7 @@ def load_data_optimized():
         del chunks
         gc.collect()
 
-        # --- PROVINCE NAME STANDARDIZATION ---
+        # --- A. PROVINCE NAME STANDARDIZATION ---
         province_map = {
             "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
             "BALOUCHISTAN": "Balochistan", "Balouchistan": "Balochistan",
@@ -72,7 +72,17 @@ def load_data_optimized():
             if "Province" in col:
                 df[col] = df[col].astype(str).map(province_map).fillna(df[col]).astype("category")
 
-        # Codebook
+        # --- B. FIX SPECIFIC VALUE LABELS (YES/NO) ---
+        # This fixes S4C81 (Read) and S4C82 (Write) showing as 1/2
+        target_cols = ['S4C81', 'S4C82'] 
+        for c in target_cols:
+            if c in df.columns:
+                df[c] = df[c].astype(str).replace({
+                    "1": "Yes", "1.0": "Yes",
+                    "2": "No",  "2.0": "No"
+                }).astype("category")
+
+        # --- C. CODEBOOK MAPPING ---
         if os.path.exists("code.csv"):
             codes = pd.read_csv("code.csv")
             rename_dict = {}
@@ -112,7 +122,7 @@ try:
         with c1:
             st.subheader("Employment to Population Ratio")
             
-            # --- FIX: REVERTED COLORS TO PRISM ---
+            # Colors: Prism (Professional)
             emp_pop_data = pd.DataFrame({
                 "Province": ["Pakistan (Avg)", "Punjab", "Sindh", "Balochistan", "KP"],
                 "Ratio": [43.0, 45.4, 42.3, 39.3, 37.2]
@@ -136,7 +146,7 @@ try:
                                color_discrete_sequence=px.colors.qualitative.Pastel)
             st.plotly_chart(fig_rates, use_container_width=True)
 
-        # --- INDUSTRY SECTION (FIXED RANKING) ---
+        # INDUSTRY
         st.subheader("🏢 Employment by Major Industry")
         
         ind_data = pd.DataFrame({
@@ -284,7 +294,6 @@ try:
                         if prov_col:
                             prov_grp = main_data.groupby([prov_col, target_q], observed=True).size().reset_index(name='Count')
                             
-                            # --- FIX: STACKED PERCENTAGE ---
                             prov_totals = prov_grp.groupby(prov_col, observed=True)['Count'].transform('sum')
                             prov_grp['%'] = (prov_grp['Count'] / prov_totals * 100).fillna(0)
                             
@@ -298,8 +307,6 @@ try:
                             g_counts = main_data[sex_col].value_counts().reset_index()
                             g_counts.columns = ["Gender", "Count"]
                             fig_pie = px.pie(g_counts, names="Gender", values="Count", hole=0.5)
-                            
-                            # --- FIX: LEGEND ON ---
                             fig_pie.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.1))
                             st.plotly_chart(fig_pie, use_container_width=True)
 
@@ -319,23 +326,22 @@ try:
                         st.markdown("**📈 Age Trends (%)**")
                         if age_col:
                             chart_data = main_data.copy()
-                            # --- CUSTOM AGE GROUPS (SORT ORDER ENFORCED) ---
+                            # Custom Age Groups
                             bins = [0, 4, 5, 9, 12, 15, 18, 24, 30, 40, 50, 60, 65, 200]
                             labels = ['0-4', '4-5', '5-9', '9-12', '12-15', '15-18', '18-24', '25-30', '30-40', '40-50', '50-60', '60-65', '65+']
                             
-                            # Create Categorical Column with Strict Order
                             chart_data['AgeGrp'] = pd.cut(chart_data[age_col], bins=bins, labels=labels, right=False)
                             
                             age_grp = chart_data.groupby(['AgeGrp', target_q], observed=True).size().reset_index(name='Count')
                             age_totals = age_grp.groupby('AgeGrp', observed=True)['Count'].transform('sum')
                             age_grp['%'] = (age_grp['Count'] / age_totals * 100).fillna(0)
                             
-                            # Explicitly Force Sort Order
+                            # Forced Sort Order
                             age_grp['AgeGrp'] = pd.Categorical(age_grp['AgeGrp'], categories=labels, ordered=True)
                             age_grp = age_grp.sort_values('AgeGrp')
                             
                             fig_age = px.area(age_grp, x="AgeGrp", y="%", color=target_q, markers=True,
-                                            category_orders={"AgeGrp": labels}) # Forces Plotly Order
+                                            category_orders={"AgeGrp": labels}) 
                             fig_age.update_xaxes(type='category') 
                             st.plotly_chart(fig_age, use_container_width=True)
 
