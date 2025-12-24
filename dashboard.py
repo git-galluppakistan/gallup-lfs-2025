@@ -43,7 +43,7 @@ def load_data_optimized():
 
         chunks = []
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
-            # Clean column names (strip spaces)
+            # Clean column names
             chunk.columns = chunk.columns.str.strip()
             
             for col in chunk.columns:
@@ -137,6 +137,7 @@ try:
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Employment to Population Ratio")
+            
             emp_pop_data = pd.DataFrame({
                 "Province": ["Pakistan (Avg)", "Punjab", "Sindh", "Balochistan", "KP"],
                 "Ratio": [43.0, 45.4, 42.3, 39.3, 37.2]
@@ -198,16 +199,13 @@ try:
                     return sorted([x for x in df[column].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown"]])
                 return []
 
-            # 1. PROVINCE
             prov_list = get_clean_list(prov_col)
             sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list)
 
-            # 2. AGE (Moved Up)
             if age_col:
                 min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
                 sel_age = st.sidebar.slider("Age Range (Filter)", min_age, max_age, (min_age, max_age))
 
-            # 3. DISTRICT (Moved Down)
             sel_dist = []
             if dist_col in df.columns:
                 valid_dist_mask = (df[prov_col] != "Balochistan")
@@ -219,7 +217,6 @@ try:
                 ])
                 sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts)
 
-            # 4. OTHERS
             sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col))
             sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col))
             sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col))
@@ -249,6 +246,11 @@ try:
                                   index=questions.index(default_target) if default_target in questions else 0)
 
             if target_q:
+                # --- NEW HEADER FOR QUESTION TITLE ---
+                # This moves the long question text OUT of the charts
+                st.markdown(f"### 🧐 Analysis of: {target_q}")
+                st.markdown("---")
+
                 cols_to_load = [target_q] + [c for c in [prov_col, sex_col, reg_col, age_col, edu_col] if c]
                 main_data = df.loc[mask, cols_to_load]
                 main_data[target_q] = main_data[target_q].astype(str)
@@ -318,6 +320,8 @@ try:
                         fig_bar = px.bar(counts, x="Answer", y="%", color="Answer", 
                                         text=counts["%"].apply(lambda x: f"{x:.1f}%"),
                                         color_discrete_sequence=px.colors.qualitative.Bold)
+                        # Remove title from inside chart since we put it at top
+                        fig_bar.update_layout(showlegend=False, title=None)
                         st.plotly_chart(fig_bar, use_container_width=True)
 
                     with col2:
@@ -327,7 +331,7 @@ try:
                             prov_totals = prov_grp.groupby(prov_col, observed=True)['Count'].transform('sum')
                             prov_grp['%'] = (prov_grp['Count'] / prov_totals * 100).fillna(0)
                             fig_prov = px.bar(prov_grp, x=prov_col, y="%", color=target_q, barmode="stack")
-                            fig_prov.update_layout(showlegend=False, yaxis_title="%")
+                            fig_prov.update_layout(showlegend=False, yaxis_title="%", title=None)
                             st.plotly_chart(fig_prov, use_container_width=True)
 
                     with col3:
@@ -336,7 +340,7 @@ try:
                             g_counts = main_data[sex_col].value_counts().reset_index()
                             g_counts.columns = ["Gender", "Count"]
                             fig_pie = px.pie(g_counts, names="Gender", values="Count", hole=0.5)
-                            fig_pie.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.1))
+                            fig_pie.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.1), title=None)
                             st.plotly_chart(fig_pie, use_container_width=True)
 
                     # 3. CHARTS ROW 2
@@ -349,6 +353,7 @@ try:
                             reg_counts.columns = ["Region", "Count"]
                             fig_reg = px.pie(reg_counts, names="Region", values="Count", 
                                           color_discrete_sequence=px.colors.qualitative.Set3)
+                            fig_reg.update_layout(title=None)
                             st.plotly_chart(fig_reg, use_container_width=True)
 
                     with col5:
@@ -370,6 +375,7 @@ try:
                             fig_age = px.area(age_grp, x="AgeGrp", y="%", color=target_q, markers=True,
                                             category_orders={"AgeGrp": labels}) 
                             fig_age.update_xaxes(type='category') 
+                            fig_age.update_layout(title=None)
                             st.plotly_chart(fig_age, use_container_width=True)
 
                     # 4. TABLES
@@ -394,4 +400,3 @@ try:
 
 except Exception as e:
     st.error(f"🚨 Critical Dashboard Error: {e}")
-
