@@ -111,12 +111,21 @@ try:
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Employment to Population Ratio")
+            
+            # --- FIX: REORDERED & COLORED ---
             emp_pop_data = pd.DataFrame({
-                "Province": ["Punjab", "Pakistan (Avg)", "Sindh", "Balochistan", "KP"],
-                "Ratio": [45.4, 43.0, 42.3, 39.3, 37.2]
+                "Province": ["Pakistan (Avg)", "Punjab", "Sindh", "Balochistan", "KP"],
+                "Ratio": [43.0, 45.4, 42.3, 39.3, 37.2],
+                "Color": ["#d62728", "#1f77b4", "#1f77b4", "#1f77b4", "#1f77b4"] # Red for Pakistan, Blue for others
             })
-            fig_ep = px.bar(emp_pop_data, x="Province", y="Ratio", color="Province", text="Ratio",
-                            color_discrete_sequence=px.colors.qualitative.Prism)
+            
+            fig_ep = px.bar(emp_pop_data, x="Province", y="Ratio", text="Ratio",
+                            color="Province", 
+                            color_discrete_sequence=["#d62728", "#1f77b4", "#1f77b4", "#1f77b4", "#1f77b4"])
+            
+            # Force color mapping manually to ensure Pakistan is Red
+            fig_ep.update_traces(marker_color=emp_pop_data["Color"]) 
+            
             fig_ep.update_traces(texttemplate='%{text}%', textposition='outside')
             fig_ep.update_layout(yaxis_range=[0, 60], showlegend=False)
             st.plotly_chart(fig_ep, use_container_width=True)
@@ -131,21 +140,26 @@ try:
                                color_discrete_sequence=px.colors.qualitative.Pastel)
             st.plotly_chart(fig_rates, use_container_width=True)
 
+        # --- INDUSTRY SECTION (FIXED) ---
         st.subheader("🏢 Employment by Major Industry")
-        ind_col1, ind_col2 = st.columns([2, 1])
-        with ind_col1:
-            ind_data = pd.DataFrame({
-                "Industry": ["Agriculture", "Wholesale & Retail", "Manufacturing", "Transport", "Construction", "Other"],
-                "Share": [40.0, 16.0, 25.4, 6.6, 11.0, 1.0] 
-            })
-            fig_ind = px.bar(ind_data, x="Share", y="Industry", orientation='h', text="Share",
-                             color="Share", color_continuous_scale="Blues")
-            fig_ind.update_traces(texttemplate='%{text}%', textposition='outside')
-            fig_ind.update_layout(xaxis_range=[0, 50])
-            st.plotly_chart(fig_ind, use_container_width=True)
         
-        with ind_col2:
-            st.info("**Key Insight:** Wholesale & Retail Trade is the 2nd largest employer after Agriculture.")
+        # Corrected Data: Manufacturing is 2nd
+        ind_data = pd.DataFrame({
+            "Industry": ["Agriculture", "Manufacturing", "Wholesale & Retail", "Construction", "Transport", "Other"],
+            "Share": [40.0, 25.4, 16.0, 11.0, 6.6, 1.0] 
+        })
+        
+        # Sort for Chart
+        ind_data = ind_data.sort_values(by="Share", ascending=True)
+
+        fig_ind = px.bar(ind_data, x="Share", y="Industry", orientation='h', text="Share",
+                         color="Share", color_continuous_scale="Blues")
+        fig_ind.update_traces(texttemplate='%{text}%', textposition='outside')
+        fig_ind.update_layout(xaxis_range=[0, 50], height=400)
+        st.plotly_chart(fig_ind, use_container_width=True)
+        
+        # Corrected Text Below Chart
+        st.info("**Key Insight:** Manufacturing is the 2nd largest employer (25.4%), followed by Wholesale & Retail Trade (16.0%).")
 
     # ==============================================================================
     # TAB 2: DATA EXPLORER
@@ -203,7 +217,7 @@ try:
             # --- QUESTION SELECTOR ---
             ignore = [prov_col, reg_col, sex_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode"]
             questions = [c for c in df.columns if c not in ignore]
-            default_target = "Marital Status (S4C7)"
+            default_target = "Marital status (S4C7)"
             target_q = st.selectbox("Select Variable to Analyze:", questions, 
                                   index=questions.index(default_target) if default_target in questions else 0)
 
@@ -250,7 +264,6 @@ try:
                             if not label_data.empty:
                                 fig_map.add_trace(go.Scattermapbox(
                                     lat=label_data["Lat"], lon=label_data["Lon"], mode='text',
-                                    # REMOVED HTML BOLD TAGS HERE for clean map
                                     text=label_data.apply(lambda x: f"{x['Percent']:.1f}%", axis=1),
                                     textfont=dict(size=14, color='black'), showlegend=False, hoverinfo='none'
                                 ))
@@ -274,11 +287,17 @@ try:
                         st.plotly_chart(fig_bar, use_container_width=True)
 
                     with col2:
-                        st.markdown("**🗺️ By Province (Stacked)**")
+                        st.markdown("**🗺️ By Province (Percentage)**")
                         if prov_col:
                             prov_grp = main_data.groupby([prov_col, target_q], observed=True).size().reset_index(name='Count')
-                            fig_prov = px.bar(prov_grp, x=prov_col, y="Count", color=target_q, barmode="stack")
-                            fig_prov.update_layout(showlegend=False)
+                            
+                            # --- FIX: PERCENTAGE CALCULATION ---
+                            prov_totals = prov_grp.groupby(prov_col, observed=True)['Count'].transform('sum')
+                            prov_grp['%'] = (prov_grp['Count'] / prov_totals * 100).fillna(0)
+                            
+                            # Use % on Y-axis
+                            fig_prov = px.bar(prov_grp, x=prov_col, y="%", color=target_q, barmode="stack")
+                            fig_prov.update_layout(showlegend=False, yaxis_title="%")
                             st.plotly_chart(fig_prov, use_container_width=True)
 
                     with col3:
@@ -287,7 +306,9 @@ try:
                             g_counts = main_data[sex_col].value_counts().reset_index()
                             g_counts.columns = ["Gender", "Count"]
                             fig_pie = px.pie(g_counts, names="Gender", values="Count", hole=0.5)
-                            fig_pie.update_layout(showlegend=False)
+                            
+                            # --- FIX: SHOW LEGEND ---
+                            fig_pie.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.1))
                             st.plotly_chart(fig_pie, use_container_width=True)
 
                     # 3. CHARTS ROW 2
@@ -306,7 +327,6 @@ try:
                         st.markdown("**📈 Age Trends (%)**")
                         if age_col:
                             chart_data = main_data.copy()
-                            # FIXED BINS EXACTLY AS REQUESTED
                             bins = [0, 4, 5, 9, 12, 15, 18, 24, 30, 40, 50, 60, 65, 200]
                             labels = ['0-4', '4-5', '5-9', '9-12', '12-15', '15-18', '18-24', '25-30', '30-40', '40-50', '50-60', '60-65', '65+']
                             
@@ -317,6 +337,7 @@ try:
                             age_grp['%'] = (age_grp['Count'] / age_totals * 100).fillna(0)
                             
                             fig_age = px.area(age_grp, x="AgeGrp", y="%", color=target_q, markers=True)
+                            fig_age.update_xaxes(type='category')
                             st.plotly_chart(fig_age, use_container_width=True)
 
                     # 4. TABLES
@@ -341,4 +362,3 @@ try:
 
 except Exception as e:
     st.error(f"🚨 Critical Dashboard Error: {e}")
-
