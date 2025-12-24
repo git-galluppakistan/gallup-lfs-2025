@@ -32,8 +32,20 @@ st.markdown("""
 
 st.title("📊 Gallup Pakistan: Labour Force Survey 2024-25")
 
-# --- 2. SAFE DATA LOADER ---
-@st.cache_data
+# --- 2. MEMORY-OPTIMIZED DATA LOADERS ---
+
+# A. Load GeoJSON separately (Cached)
+@st.cache_data(ttl=3600)  # Cache map for 1 hour
+def load_geojson():
+    geojson_path = "pakistan_provinces.geojson"
+    if os.path.exists(geojson_path):
+        with open(geojson_path) as f:
+            return json.load(f)
+    return None
+
+# B. Load Main Data (Shared Resource)
+# We use cache_resource to keep ONE copy in memory for all users
+@st.cache_resource(show_spinner="Loading Heavy Dataset...", ttl="2h")
 def load_data_optimized():
     try:
         file_name = "data.zip" if os.path.exists("data.zip") else "Data.zip"
@@ -42,26 +54,35 @@ def load_data_optimized():
             return None
 
         chunks = []
+        # Load in chunks to manage instant memory spikes
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
             # Clean column names
             chunk.columns = chunk.columns.str.strip()
             
+            # Convert to CATEGORY to save 80% RAM
             for col in chunk.columns:
                 chunk[col] = chunk[col].astype('category')
             
+            # Numeric conversion for Age
             age_col = next((c for c in chunk.columns if c in ['S4C6', 'Age']), None)
             if age_col:
                 chunk[age_col] = pd.to_numeric(chunk[age_col], errors='coerce')
+            
             chunks.append(chunk)
         
         if not chunks:
             return None
 
+        # Combine chunks
         df = pd.concat(chunks, axis=0)
+        
+        # Free up chunk memory immediately
         del chunks
         gc.collect()
 
-        # --- A. PROVINCE NAME STANDARDIZATION ---
+        # --- PRE-PROCESSING (Done once) ---
+        
+        # 1. Province Map
         province_map = {
             "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
             "BALOUCHISTAN": "Balochistan", "Balouchistan": "Balochistan",
@@ -75,7 +96,7 @@ def load_data_optimized():
             if "Province" in col:
                 df[col] = df[col].astype(str).map(province_map).fillna(df[col]).astype("category")
 
-        # --- B. DISTRICT MAPPING ---
+        # 2. District Map
         map_files = ["district_mapping.csv", "DSTT.xlsx - Sheet1.csv"]
         map_df = None
         for f in map_files:
@@ -86,10 +107,9 @@ def load_data_optimized():
         if map_df is not None and "PCode" in map_df.columns and "District" in map_df.columns:
             dist_map = map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
             if "PCode" in df.columns:
-                df["District"] = df["PCode"].astype(str).map(dist_map)
-                df["District"] = df["District"].astype('category')
+                df["District"] = df["PCode"].astype(str).map(dist_map).astype('category')
 
-        # --- C. GLOBAL FIX FOR SPECIFIC VALUES ---
+        # 3. Global Value Fixes (Yes/No)
         target_cols = ['S4C81', 'S4C82'] 
         for c in target_cols:
             if c in df.columns:
@@ -98,7 +118,7 @@ def load_data_optimized():
                     "2": "No",  "2.0": "No",  "02": "No"
                 }).astype("category")
 
-        # --- D. CODEBOOK MAPPING ---
+        # 4. Codebook Rename
         if os.path.exists("code.csv"):
             codes = pd.read_csv("code.csv")
             rename_dict = {}
@@ -113,7 +133,12 @@ def load_data_optimized():
         st.error(f"⚠️ Data Loading Error: {e}")
         return None
 
+# Load Data
 df = load_data_optimized()
+pak_geojson = load_geojson()
+
+# Garbage Collection after load
+gc.collect()
 
 # --- 3. DASHBOARD TABS ---
 try:
@@ -177,7 +202,7 @@ try:
     # ==============================================================================
     with tab2:
         if df is not None:
-            # --- CLEANING & COLUMNS ---
+            # --- HELPER FUNCTIONS ---
             def get_col(candidates):
                 for c in candidates:
                     for col in df.columns:
@@ -267,11 +292,8 @@ try:
                     
                     # 1. MAP
                     st.subheader(f"🗺️ Province Heatmap: {top_ans}")
-                    geojson_path = "pakistan_provinces.geojson"
                     
-                    if os.path.exists(geojson_path) and prov_col:
-                        with open(geojson_path) as f: pak_geojson = json.load(f)
-                        
+                    if pak_geojson and prov_col:
                         prov_stats = pd.crosstab(main_data[prov_col], main_data[target_q], normalize='index') * 100
                         if top_ans in prov_stats.columns:
                             map_data = prov_stats[[top_ans]].reset_index()
