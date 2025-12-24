@@ -244,7 +244,7 @@ try:
             # --- QUESTION SELECTOR ---
             ignore = [prov_col, reg_col, sex_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode", "District"]
             questions = [c for c in df.columns if c not in ignore]
-            default_target = "Marital status (S4C7)"
+            default_target = "Marital Status (S4C7)"
             target_q = st.selectbox("Select Variable to Analyze:", questions, 
                                   index=questions.index(default_target) if default_target in questions else 0)
 
@@ -394,3 +394,4 @@ try:
 
 except Exception as e:
     st.error(f"🚨 Critical Dashboard Error: {e}")
+
