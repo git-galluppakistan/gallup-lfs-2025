@@ -51,28 +51,41 @@ def load_data_optimized():
         del chunks
         gc.collect()
 
-        # --- C. PROVINCE NAME STANDARDIZATION ---
-        # This matches your Data to the GeoJSON keys
+        # --- C. PROVINCE NAME STANDARDIZATION (EXACT MATCH FOR MAP) ---
+        # The values on the RIGHT must match the GeoJSON 'province_territory' exactly
         province_map = {
+            # Source in Data : Target in GeoJSON
             "KP": "Khyber Pakhtunkhwa",
             "KPK": "Khyber Pakhtunkhwa",
             "N.W.F.P": "Khyber Pakhtunkhwa",
+            "Khyber Pakhtunkhwa": "Khyber Pakhtunkhwa",
+            
             "BALOUCHISTAN": "Balochistan",
             "Balouchistan": "Balochistan",
+            "Balochistan": "Balochistan",
+            
             "FATA": "Federally Administered Tribal Areas",
             "F.A.T.A": "Federally Administered Tribal Areas",
-            "ICT": "Islamabad",
-            "Islamabad Capital Territory": "Islamabad",
+            
+            "ICT": "Islamabad Capital Territory",
+            "Islamabad": "Islamabad Capital Territory",
+            "Islamabad Capital Territory": "Islamabad Capital Territory",
+            
             "Punjab": "Punjab",
             "Sindh": "Sindh",
-            "AJK": "Azad Kashmir",
-            "GB": "Gilgit Baltistan"
+            
+            "AJK": "Azad Jammu & Kashmir",
+            "Azad Kashmir": "Azad Jammu & Kashmir",
+            
+            "GB": "Gilgit-Baltistan",
+            "Gilgit Baltistan": "Gilgit-Baltistan"
         }
         
         # Apply standard names to all Province columns found
         for col in df.columns:
             if "Province" in col:
-                df[col] = df[col].astype(str).replace(province_map).astype("category")
+                df[col] = df[col].astype(str).map(province_map).fillna(df[col]) # Map and keep original if no match
+                df[col] = df[col].astype("category")
 
         # D. Load Codebook
         if os.path.exists("code.csv"):
@@ -187,7 +200,7 @@ if df is not None:
             with open(geojson_path) as f:
                 pak_geojson = json.load(f)
             
-            # Calculate Province Stats
+            # Calculate Province Stats (Overall Average per Province)
             prov_stats = pd.crosstab(main_data[prov_col], main_data[target_q], normalize='index') * 100
             
             if top_ans in prov_stats.columns:
@@ -195,13 +208,11 @@ if df is not None:
                 map_data.columns = ["Province", "Percent"]
                 
                 # DRAW MAP
-                # Note: We use the SAME District GeoJSON, but map to "province_territory"
-                # This colors all districts in a province the same color.
                 fig_map = px.choropleth_mapbox(
                     map_data, 
                     geojson=pak_geojson, 
                     locations="Province",
-                    featureidkey="properties.province_territory", # <-- The Key Change
+                    featureidkey="properties.province_territory", # Matches EXACT GeoJSON key
                     color="Percent", 
                     color_continuous_scale="Spectral_r", 
                     mapbox_style="carto-positron",
@@ -309,4 +320,3 @@ if df is not None:
 
 else:
     st.info("Awaiting Data...")
-
