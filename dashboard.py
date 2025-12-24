@@ -72,8 +72,23 @@ def load_data_optimized():
             if "Province" in col:
                 df[col] = df[col].astype(str).map(province_map).fillna(df[col]).astype("category")
 
-        # --- B. FIX SPECIFIC VALUE LABELS (YES/NO) ---
-        # This fixes S4C81 (Read) and S4C82 (Write) showing as 1/2
+        # --- B. DISTRICT MAPPING (Restored) ---
+        # Checks for the mapping file to inject the "District" column
+        map_files = ["district_mapping.csv", "DSTT.xlsx - Sheet1.csv"]
+        map_df = None
+        for f in map_files:
+            if os.path.exists(f):
+                map_df = pd.read_csv(f, dtype=str)
+                break
+        
+        if map_df is not None and "PCode" in map_df.columns and "District" in map_df.columns:
+            # Create lookup dictionary
+            dist_map = map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
+            if "PCode" in df.columns:
+                df["District"] = df["PCode"].astype(str).map(dist_map)
+                df["District"] = df["District"].astype('category')
+
+        # --- C. FIX SPECIFIC VALUE LABELS ---
         target_cols = ['S4C81', 'S4C82'] 
         for c in target_cols:
             if c in df.columns:
@@ -82,12 +97,12 @@ def load_data_optimized():
                     "2": "No",  "2.0": "No"
                 }).astype("category")
 
-        # --- C. CODEBOOK MAPPING ---
+        # --- D. CODEBOOK MAPPING ---
         if os.path.exists("code.csv"):
             codes = pd.read_csv("code.csv")
             rename_dict = {}
             for code, label in zip(codes.iloc[:, 0], codes.iloc[:, 1]):
-                if code not in ['Province', 'Region', 'RSex', 'S4C5', 'S4C9', 'S4C6']:
+                if code not in ['Province', 'Region', 'RSex', 'S4C5', 'S4C9', 'S4C6', 'District']:
                     rename_dict[code] = f"{label} ({code})"
             df.rename(columns=rename_dict, inplace=True)
 
@@ -121,17 +136,13 @@ try:
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Employment to Population Ratio")
-            
-            # Colors: Prism (Professional)
             emp_pop_data = pd.DataFrame({
                 "Province": ["Pakistan (Avg)", "Punjab", "Sindh", "Balochistan", "KP"],
                 "Ratio": [43.0, 45.4, 42.3, 39.3, 37.2]
             })
-            
             fig_ep = px.bar(emp_pop_data, x="Province", y="Ratio", text="Ratio",
                             color="Province", 
                             color_discrete_sequence=px.colors.qualitative.Prism)
-            
             fig_ep.update_traces(texttemplate='%{text}%', textposition='outside')
             fig_ep.update_layout(yaxis_range=[0, 60], showlegend=False)
             st.plotly_chart(fig_ep, use_container_width=True)
@@ -146,22 +157,17 @@ try:
                                color_discrete_sequence=px.colors.qualitative.Pastel)
             st.plotly_chart(fig_rates, use_container_width=True)
 
-        # INDUSTRY
         st.subheader("🏢 Employment by Major Industry")
-        
         ind_data = pd.DataFrame({
             "Industry": ["Agriculture", "Manufacturing", "Wholesale & Retail", "Construction", "Transport", "Other"],
             "Share": [40.0, 25.4, 16.0, 11.0, 6.6, 1.0] 
         })
-        
         ind_data = ind_data.sort_values(by="Share", ascending=True)
-
         fig_ind = px.bar(ind_data, x="Share", y="Industry", orientation='h', text="Share",
                          color="Share", color_continuous_scale="Blues")
         fig_ind.update_traces(texttemplate='%{text}%', textposition='outside')
         fig_ind.update_layout(xaxis_range=[0, 50], height=400)
         st.plotly_chart(fig_ind, use_container_width=True)
-        
         st.info("**Key Insight:** Manufacturing is the 2nd largest employer (25.4%), followed by Wholesale & Retail Trade (16.0%).")
 
     # ==============================================================================
@@ -182,6 +188,7 @@ try:
             sex_col = get_col(["S4C5", "RSex", "Gender"])
             edu_col = get_col(["S4C9", "Education", "Highest class"])
             age_col = get_col(["S4C6", "Age"])
+            dist_col = "District" # This now exists if mapped correctly
             
             # --- FILTERS ---
             st.sidebar.markdown("## 🔍 Data Explorer Filters")
@@ -192,7 +199,24 @@ try:
 
             prov_list = get_clean_list(prov_col)
             sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list)
-            
+
+            # --- CUSTOM DISTRICT FILTER (Excluding Balochistan) ---
+            sel_dist = []
+            if dist_col in df.columns:
+                # Logic: Get districts where Province is NOT Balochistan
+                # (and respect the current Province selection if made)
+                valid_dist_mask = (df[prov_col] != "Balochistan")
+                
+                if sel_prov:
+                    valid_dist_mask = valid_dist_mask & df[prov_col].isin(sel_prov)
+                
+                valid_districts = sorted([
+                    x for x in df[valid_dist_mask][dist_col].unique().tolist() 
+                    if str(x) not in ["#NULL!", "nan", "None", "", "Unknown"]
+                ])
+                sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts)
+            # -----------------------------------------------------
+
             if age_col:
                 min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
                 sel_age = st.sidebar.slider("Age Range (Filter)", min_age, max_age, (min_age, max_age))
@@ -204,6 +228,7 @@ try:
             # --- APPLY FILTERS ---
             mask = pd.Series(True, index=df.index)
             if prov_col: mask = mask & df[prov_col].isin(sel_prov)
+            if sel_dist and dist_col in df.columns: mask = mask & df[dist_col].isin(sel_dist) # Apply District Filter
             if age_col: mask = mask & (df[age_col] >= sel_age[0]) & (df[age_col] <= sel_age[1])
             if sel_reg: mask = mask & df[reg_col].isin(sel_reg)
             if sel_sex: mask = mask & df[sex_col].isin(sel_sex)
@@ -218,7 +243,7 @@ try:
             st.markdown("---")
             
             # --- QUESTION SELECTOR ---
-            ignore = [prov_col, reg_col, sex_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode"]
+            ignore = [prov_col, reg_col, sex_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode", "District"]
             questions = [c for c in df.columns if c not in ignore]
             default_target = "Marital Status (S4C7)"
             target_q = st.selectbox("Select Variable to Analyze:", questions, 
@@ -293,10 +318,8 @@ try:
                         st.markdown("**🗺️ By Province (Percentage)**")
                         if prov_col:
                             prov_grp = main_data.groupby([prov_col, target_q], observed=True).size().reset_index(name='Count')
-                            
                             prov_totals = prov_grp.groupby(prov_col, observed=True)['Count'].transform('sum')
                             prov_grp['%'] = (prov_grp['Count'] / prov_totals * 100).fillna(0)
-                            
                             fig_prov = px.bar(prov_grp, x=prov_col, y="%", color=target_q, barmode="stack")
                             fig_prov.update_layout(showlegend=False, yaxis_title="%")
                             st.plotly_chart(fig_prov, use_container_width=True)
@@ -326,7 +349,6 @@ try:
                         st.markdown("**📈 Age Trends (%)**")
                         if age_col:
                             chart_data = main_data.copy()
-                            # Custom Age Groups
                             bins = [0, 4, 5, 9, 12, 15, 18, 24, 30, 40, 50, 60, 65, 200]
                             labels = ['0-4', '4-5', '5-9', '9-12', '12-15', '15-18', '18-24', '25-30', '30-40', '40-50', '50-60', '60-65', '65+']
                             
@@ -336,7 +358,6 @@ try:
                             age_totals = age_grp.groupby('AgeGrp', observed=True)['Count'].transform('sum')
                             age_grp['%'] = (age_grp['Count'] / age_totals * 100).fillna(0)
                             
-                            # Forced Sort Order
                             age_grp['AgeGrp'] = pd.Categorical(age_grp['AgeGrp'], categories=labels, ordered=True)
                             age_grp = age_grp.sort_values('AgeGrp')
                             
