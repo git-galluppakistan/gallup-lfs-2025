@@ -57,8 +57,8 @@ def load_data_optimized():
         del chunks
         gc.collect()
 
-        # --- PROVINCE NAME STANDARDIZATION (Critical for Map) ---
-        # Maps your Data Labels -> GeoJSON Labels
+        # --- PROVINCE NAME STANDARDIZATION ---
+        # Matches Data -> New GeoJSON Keys (Standard Names)
         province_map = {
             "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
             "BALOUCHISTAN": "Balochistan", "Balouchistan": "Balochistan",
@@ -94,7 +94,7 @@ try:
     tab1, tab2 = st.tabs(["📑 Executive Summary (PDF Report)", "🔍 Data Explorer (Interactive)"])
 
     # ==============================================================================
-    # TAB 1: EXECUTIVE SUMMARY (STATIC DATA)
+    # TAB 1: EXECUTIVE SUMMARY
     # ==============================================================================
     with tab1:
         st.markdown("### 📌 Key Findings: Labour Force Survey 2024-25")
@@ -209,9 +209,9 @@ try:
                 if not main_data.empty:
                     top_ans = main_data[target_q].mode()[0]
                     
-                    # --- MAP SECTION ---
+                    # --- NEW PROVINCE MAP SECTION ---
                     st.subheader(f"🗺️ Province Heatmap: {top_ans}")
-                    geojson_path = "pakistan_districts.geojson"
+                    geojson_path = "pakistan_provinces.geojson" # UPDATED FILENAME
                     
                     if os.path.exists(geojson_path) and prov_col:
                         with open(geojson_path) as f: pak_geojson = json.load(f)
@@ -223,12 +223,12 @@ try:
                             map_data = prov_stats[[top_ans]].reset_index()
                             map_data.columns = ["Province", "Percent"]
                             
-                            # DRAW MAP (The Fix is marker_line_width=0)
+                            # DRAW MAP (Simple & Clean)
                             fig_map = px.choropleth_mapbox(
                                 map_data, 
                                 geojson=pak_geojson, 
                                 locations="Province",
-                                featureidkey="properties.province_territory", # Use District File, but Map to Province Key
+                                featureidkey="properties.shapeName", # KEY MIGHT VARY, BUT 'shapeName' or 'name' is standard for ADM1
                                 color="Percent", 
                                 color_continuous_scale="Spectral_r",
                                 mapbox_style="carto-positron", 
@@ -236,12 +236,12 @@ try:
                                 center={"lat": 30.3753, "lon": 69.3451},
                                 opacity=0.7
                             )
-                            # This removes the district grid lines, merging them into a solid block!
-                            fig_map.update_traces(marker_line_width=0)
                             fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=500)
                             st.plotly_chart(fig_map, use_container_width=True)
+                    else:
+                         st.warning("⚠️ Please upload 'pakistan_provinces.geojson' to see the map.")
 
-                    # --- CHARTS SECTION ---
+                    # --- CHARTS ---
                     mc1, mc2 = st.columns(2)
                     with mc1:
                         st.markdown("**📊 Result Distribution**")
