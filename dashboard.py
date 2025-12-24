@@ -93,7 +93,6 @@ def load_data_optimized():
         target_cols = ['S4C81', 'S4C82'] 
         for c in target_cols:
             if c in df.columns:
-                # Handle spaces, floats (1.0), and ints (1) by regex mapping
                 df[c] = df[c].astype(str).str.strip().replace({
                     "1": "Yes", "1.0": "Yes", "01": "Yes",
                     "2": "No",  "2.0": "No",  "02": "No"
@@ -199,12 +198,18 @@ try:
                     return sorted([x for x in df[column].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown"]])
                 return []
 
+            # 1. PROVINCE
             prov_list = get_clean_list(prov_col)
             sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list)
 
+            # 2. AGE (Moved Up)
+            if age_col:
+                min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
+                sel_age = st.sidebar.slider("Age Range (Filter)", min_age, max_age, (min_age, max_age))
+
+            # 3. DISTRICT (Moved Down)
             sel_dist = []
             if dist_col in df.columns:
-                # EXCLUDE BALOCHISTAN DISTRICTS
                 valid_dist_mask = (df[prov_col] != "Balochistan")
                 if sel_prov:
                     valid_dist_mask = valid_dist_mask & df[prov_col].isin(sel_prov)
@@ -214,10 +219,7 @@ try:
                 ])
                 sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts)
 
-            if age_col:
-                min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
-                sel_age = st.sidebar.slider("Age Range (Filter)", min_age, max_age, (min_age, max_age))
-            
+            # 4. OTHERS
             sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col))
             sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col))
             sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col))
@@ -225,8 +227,8 @@ try:
             # --- APPLY FILTERS ---
             mask = pd.Series(True, index=df.index)
             if prov_col: mask = mask & df[prov_col].isin(sel_prov)
-            if sel_dist and dist_col in df.columns: mask = mask & df[dist_col].isin(sel_dist)
             if age_col: mask = mask & (df[age_col] >= sel_age[0]) & (df[age_col] <= sel_age[1])
+            if sel_dist and dist_col in df.columns: mask = mask & df[dist_col].isin(sel_dist)
             if sel_reg: mask = mask & df[reg_col].isin(sel_reg)
             if sel_sex: mask = mask & df[sex_col].isin(sel_sex)
             if sel_edu: mask = mask & df[edu_col].isin(sel_edu)
@@ -252,8 +254,7 @@ try:
                 main_data[target_q] = main_data[target_q].astype(str)
                 main_data = main_data[~main_data[target_q].isin(["#NULL!", "nan", "None", "DK", "NR"])]
                 
-                # --- SAFETY PATCH: FORCE YES/NO FOR READING QUESTIONS ---
-                # This ensures legends are correct even if the global loader misses a case
+                # --- SAFETY PATCH ---
                 if "S4C81" in target_q or "S4C82" in target_q:
                     main_data[target_q] = main_data[target_q].astype(str).replace({
                         "1": "Yes", "1.0": "Yes", "01": "Yes",
