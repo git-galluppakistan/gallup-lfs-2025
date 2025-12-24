@@ -22,7 +22,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Gallup Pakistan: National LFS Survey")
+st.title("📊 Gallup Pakistan: National LFS Survey 2024-25")
 
 # --- 2. OPTIMIZED DATA LOADER ---
 @st.cache_resource
@@ -156,7 +156,7 @@ if df is not None:
     ignore = [prov_col, reg_col, sex_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode"]
     questions = [c for c in df.columns if c not in ignore]
     
-    default_target = "Marital status (S4C7)"
+    default_target = "Marital Status (S4C7)"
     default_index = questions.index(default_target) if default_target in questions else 0
     target_q = st.selectbox("Select Question to Analyze:", questions, index=default_index)
 
@@ -309,3 +309,4 @@ if df is not None:
 
 else:
     st.info("Awaiting Data...")
+
