@@ -43,6 +43,9 @@ def load_data_optimized():
 
         chunks = []
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
+            # Clean column names (strip spaces)
+            chunk.columns = chunk.columns.str.strip()
+            
             for col in chunk.columns:
                 chunk[col] = chunk[col].astype('category')
             
@@ -72,8 +75,7 @@ def load_data_optimized():
             if "Province" in col:
                 df[col] = df[col].astype(str).map(province_map).fillna(df[col]).astype("category")
 
-        # --- B. DISTRICT MAPPING (Restored) ---
-        # Checks for the mapping file to inject the "District" column
+        # --- B. DISTRICT MAPPING ---
         map_files = ["district_mapping.csv", "DSTT.xlsx - Sheet1.csv"]
         map_df = None
         for f in map_files:
@@ -82,19 +84,19 @@ def load_data_optimized():
                 break
         
         if map_df is not None and "PCode" in map_df.columns and "District" in map_df.columns:
-            # Create lookup dictionary
             dist_map = map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
             if "PCode" in df.columns:
                 df["District"] = df["PCode"].astype(str).map(dist_map)
                 df["District"] = df["District"].astype('category')
 
-        # --- C. FIX SPECIFIC VALUE LABELS ---
+        # --- C. GLOBAL FIX FOR SPECIFIC VALUES ---
         target_cols = ['S4C81', 'S4C82'] 
         for c in target_cols:
             if c in df.columns:
-                df[c] = df[c].astype(str).replace({
-                    "1": "Yes", "1.0": "Yes",
-                    "2": "No",  "2.0": "No"
+                # Handle spaces, floats (1.0), and ints (1) by regex mapping
+                df[c] = df[c].astype(str).str.strip().replace({
+                    "1": "Yes", "1.0": "Yes", "01": "Yes",
+                    "2": "No",  "2.0": "No",  "02": "No"
                 }).astype("category")
 
         # --- D. CODEBOOK MAPPING ---
@@ -188,7 +190,7 @@ try:
             sex_col = get_col(["S4C5", "RSex", "Gender"])
             edu_col = get_col(["S4C9", "Education", "Highest class"])
             age_col = get_col(["S4C6", "Age"])
-            dist_col = "District" # This now exists if mapped correctly
+            dist_col = "District"
             
             # --- FILTERS ---
             st.sidebar.markdown("## 🔍 Data Explorer Filters")
@@ -200,22 +202,17 @@ try:
             prov_list = get_clean_list(prov_col)
             sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list)
 
-            # --- CUSTOM DISTRICT FILTER (Excluding Balochistan) ---
             sel_dist = []
             if dist_col in df.columns:
-                # Logic: Get districts where Province is NOT Balochistan
-                # (and respect the current Province selection if made)
+                # EXCLUDE BALOCHISTAN DISTRICTS
                 valid_dist_mask = (df[prov_col] != "Balochistan")
-                
                 if sel_prov:
                     valid_dist_mask = valid_dist_mask & df[prov_col].isin(sel_prov)
-                
                 valid_districts = sorted([
                     x for x in df[valid_dist_mask][dist_col].unique().tolist() 
                     if str(x) not in ["#NULL!", "nan", "None", "", "Unknown"]
                 ])
                 sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts)
-            # -----------------------------------------------------
 
             if age_col:
                 min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
@@ -228,7 +225,7 @@ try:
             # --- APPLY FILTERS ---
             mask = pd.Series(True, index=df.index)
             if prov_col: mask = mask & df[prov_col].isin(sel_prov)
-            if sel_dist and dist_col in df.columns: mask = mask & df[dist_col].isin(sel_dist) # Apply District Filter
+            if sel_dist and dist_col in df.columns: mask = mask & df[dist_col].isin(sel_dist)
             if age_col: mask = mask & (df[age_col] >= sel_age[0]) & (df[age_col] <= sel_age[1])
             if sel_reg: mask = mask & df[reg_col].isin(sel_reg)
             if sel_sex: mask = mask & df[sex_col].isin(sel_sex)
@@ -245,7 +242,7 @@ try:
             # --- QUESTION SELECTOR ---
             ignore = [prov_col, reg_col, sex_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode", "District"]
             questions = [c for c in df.columns if c not in ignore]
-            default_target = "Marital Status (S4C7)"
+            default_target = "Marital status (S4C7)"
             target_q = st.selectbox("Select Variable to Analyze:", questions, 
                                   index=questions.index(default_target) if default_target in questions else 0)
 
@@ -255,6 +252,14 @@ try:
                 main_data[target_q] = main_data[target_q].astype(str)
                 main_data = main_data[~main_data[target_q].isin(["#NULL!", "nan", "None", "DK", "NR"])]
                 
+                # --- SAFETY PATCH: FORCE YES/NO FOR READING QUESTIONS ---
+                # This ensures legends are correct even if the global loader misses a case
+                if "S4C81" in target_q or "S4C82" in target_q:
+                    main_data[target_q] = main_data[target_q].astype(str).replace({
+                        "1": "Yes", "1.0": "Yes", "01": "Yes",
+                        "2": "No",  "2.0": "No",  "02": "No"
+                    })
+
                 if not main_data.empty:
                     top_ans = main_data[target_q].mode()[0]
                     
