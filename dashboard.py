@@ -22,7 +22,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Gallup Pakistan: National LFS Survey 2024-25")
+st.title("📊 Gallup Pakistan: National LFS Survey")
 
 # --- 2. OPTIMIZED DATA LOADER ---
 @st.cache_resource
@@ -51,39 +51,35 @@ def load_data_optimized():
         del chunks
         gc.collect()
 
-        # --- C. THE DISTRICT INJECTOR ---
-        map_file = "district_mapping.csv"
-        if os.path.exists(map_file):
-            map_df = pd.read_csv(map_file, dtype=str)
-            
-            if "PCode" in map_df.columns and "District" in map_df.columns:
-                district_lookup = map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
-                
-                if "PCode" in df.columns:
-                    # Map Districts, fill missing with "Unknown"
-                    df["District"] = df["PCode"].astype(str).map(district_lookup).fillna("Unknown")
-                    df["District"] = df["District"].astype('category')
-                else:
-                    st.warning("⚠️ PCode column missing in main data.")
-        else:
-            df["District"] = "Unknown"
-
-        # --- D. SPELLING FIXER ---
+        # --- C. PROVINCE NAME STANDARDIZATION ---
+        # This matches your Data to the GeoJSON keys
+        province_map = {
+            "KP": "Khyber Pakhtunkhwa",
+            "KPK": "Khyber Pakhtunkhwa",
+            "N.W.F.P": "Khyber Pakhtunkhwa",
+            "BALOUCHISTAN": "Balochistan",
+            "Balouchistan": "Balochistan",
+            "FATA": "Federally Administered Tribal Areas",
+            "F.A.T.A": "Federally Administered Tribal Areas",
+            "ICT": "Islamabad",
+            "Islamabad Capital Territory": "Islamabad",
+            "Punjab": "Punjab",
+            "Sindh": "Sindh",
+            "AJK": "Azad Kashmir",
+            "GB": "Gilgit Baltistan"
+        }
+        
+        # Apply standard names to all Province columns found
         for col in df.columns:
             if "Province" in col:
-                df[col] = df[col].astype(str).replace({
-                    "BALOUCHISTAN": "Balochistan",
-                    "Balouchistan": "Balochistan",
-                    "KP": "Khyber Pakhtunkhwa",
-                    "KPK": "Khyber Pakhtunkhwa"
-                }).astype("category")
+                df[col] = df[col].astype(str).replace(province_map).astype("category")
 
-        # E. Load Codebook
+        # D. Load Codebook
         if os.path.exists("code.csv"):
             codes = pd.read_csv("code.csv")
             rename_dict = {}
             for code, label in zip(codes.iloc[:, 0], codes.iloc[:, 1]):
-                if code not in ['Province', 'District', 'Region', 'Tehsil', 'RSex', 'S4C5', 'S4C9', 'S4C6', 'Mouza', 'Locality']:
+                if code not in ['Province', 'Region', 'RSex', 'S4C5', 'S4C9', 'S4C6']:
                     rename_dict[code] = f"{label} ({code})"
             df.rename(columns=rename_dict, inplace=True)
 
@@ -107,10 +103,9 @@ if df is not None:
         return None
 
     prov_col = get_col(["Province"])
-    dist_col = "District"
     reg_col = get_col(["Region"])
     
-    # Remove ONLY strictly bad rows (Empty/Null/NaN)
+    # Clean bad rows
     for col in [prov_col, reg_col]:
         if col and col in df.columns:
             df = df[~df[col].astype(str).isin(["#NULL!", "nan", "None", "nan", ""])]
@@ -118,7 +113,6 @@ if df is not None:
     # --- SIDEBAR FILTERS ---
     st.sidebar.title("🔍 Filter Panel")
 
-    tehsil_col = get_col(["Tehsil"])
     sex_col = get_col(["S4C5", "RSex", "Gender"])
     edu_col = get_col(["S4C9", "Education", "Highest class"])
     age_col = get_col(["S4C6", "Age"])
@@ -128,7 +122,7 @@ if df is not None:
             return sorted([x for x in df[column].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown"]])
         return []
 
-    # 1. Province
+    # 1. Province Filter
     prov_list = get_clean_list(prov_col)
     sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list)
     
@@ -137,34 +131,16 @@ if df is not None:
         min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
         sel_age = st.sidebar.slider("Age Range", min_age, max_age, (min_age, max_age))
     
-    # 3. District (Exclude Unknown from dropdown)
-    if sel_prov and dist_col in df.columns:
-        valid_districts = sorted([x for x in df[df[prov_col].isin(sel_prov)][dist_col].unique().tolist() if str(x) not in ["#NULL!", "nan", "", "Unknown"]])
-    else:
-        valid_districts = []
-    sel_dist = st.sidebar.multiselect("District", valid_districts)
-
-    # 4. Tehsil
-    if sel_dist and tehsil_col:
-        valid_tehsils = sorted([x for x in df[df[dist_col].isin(sel_dist)][tehsil_col].unique().tolist() if str(x) not in ["#NULL!", "nan", ""]])
-    else:
-        valid_tehsils = []
-    sel_tehsil = st.sidebar.multiselect("Tehsil", valid_tehsils)
-
-    # 5. Other Filters
+    # 3. Region & Gender
     sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col))
     sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col))
-    sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col))
-
+    
     # --- FILTER MASK ---
     mask = pd.Series(True, index=df.index)
     if prov_col: mask = mask & df[prov_col].isin(sel_prov)
     if age_col: mask = mask & (df[age_col] >= sel_age[0]) & (df[age_col] <= sel_age[1])
-    if sel_dist: mask = mask & df[dist_col].isin(sel_dist)
-    if sel_tehsil: mask = mask & df[tehsil_col].isin(sel_tehsil)
     if sel_reg: mask = mask & df[reg_col].isin(sel_reg)
     if sel_sex: mask = mask & df[sex_col].isin(sel_sex)
-    if sel_edu: mask = mask & df[edu_col].isin(sel_edu)
         
     filtered_count = mask.sum()
 
@@ -177,16 +153,16 @@ if df is not None:
     st.markdown("---")
 
     # --- MAIN QUESTION SELECTION ---
-    ignore = [prov_col, reg_col, sex_col, dist_col, tehsil_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode", "District"]
+    ignore = [prov_col, reg_col, sex_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode"]
     questions = [c for c in df.columns if c not in ignore]
     
-    default_target = "Marital Status (S4C7)"
+    default_target = "Marital status (S4C7)"
     default_index = questions.index(default_target) if default_target in questions else 0
     target_q = st.selectbox("Select Question to Analyze:", questions, index=default_index)
 
     if target_q:
         # Prepare Data
-        cols_to_load = [target_q] + [c for c in [prov_col, sex_col, reg_col, dist_col, age_col] if c]
+        cols_to_load = [target_q] + [c for c in [prov_col, sex_col, reg_col, age_col] if c]
         main_data = df.loc[mask, cols_to_load]
         
         # --- CHART CLEANING ---
@@ -200,52 +176,45 @@ if df is not None:
             st.warning("No data available after filtering.")
 
         # ==========================================================
-        # ROW 1: THE HERO MAP
+        # ROW 1: THE HERO MAP (PROVINCE LEVEL)
         # ==========================================================
-        st.subheader("🗺️ Geographic Distribution")
+        st.subheader("🗺️ Geographic Distribution (By Province)")
         st.caption(f"**Red** = High Percentage | **Blue** = Low Percentage (Showing data for: '{top_ans}')")
         
         geojson_path = "pakistan_districts.geojson"
         
-        # Check if we have the mapped District column
-        if os.path.exists(geojson_path) and dist_col in main_data.columns:
+        if os.path.exists(geojson_path) and prov_col:
             with open(geojson_path) as f:
                 pak_geojson = json.load(f)
             
-            merge_map = {
-                "KARACHI CENTRAL": "KARACHI", "KARACHI EAST": "KARACHI",
-                "KARACHI SOUTH": "KARACHI", "KARACHI WEST": "KARACHI",
-                "MALIR": "KARACHI", "KORANGI": "KARACHI",
-                "EAST": "KARACHI", "WEST": "KARACHI"
-            }
-            map_df = main_data.copy()
-            # Ensure District column is string
-            map_df["Map_District"] = map_df[dist_col].astype(str).replace(merge_map)
+            # Calculate Province Stats
+            prov_stats = pd.crosstab(main_data[prov_col], main_data[target_q], normalize='index') * 100
             
-            # --- FIX: EXCLUDE UNKNOWN FROM MAP ---
-            map_df = map_df[map_df["Map_District"] != "Unknown"]
-            
-            dist_stats = pd.crosstab(map_df["Map_District"], map_df[target_q], normalize='index') * 100
-            
-            if top_ans in dist_stats.columns:
-                map_data = dist_stats[[top_ans]].reset_index()
-                map_data.columns = ["District", "Percent"]
+            if top_ans in prov_stats.columns:
+                map_data = prov_stats[[top_ans]].reset_index()
+                map_data.columns = ["Province", "Percent"]
                 
+                # DRAW MAP
+                # Note: We use the SAME District GeoJSON, but map to "province_territory"
+                # This colors all districts in a province the same color.
                 fig_map = px.choropleth_mapbox(
-                    map_data, geojson=pak_geojson, locations="District",
-                    featureidkey="properties.districts",
+                    map_data, 
+                    geojson=pak_geojson, 
+                    locations="Province",
+                    featureidkey="properties.province_territory", # <-- The Key Change
                     color="Percent", 
                     color_continuous_scale="Spectral_r", 
                     mapbox_style="carto-positron",
                     zoom=4.5, center = {"lat": 30.3753, "lon": 69.3451},
-                    opacity=0.7, labels={'Percent': f'% {top_ans}'}
+                    opacity=0.7, 
+                    labels={'Percent': f'% {top_ans}'}
                 )
                 fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=500)
                 st.plotly_chart(fig_map, use_container_width=True)
             else:
                 st.warning("Not enough data to map.")
         else:
-            st.warning("⚠️ Map file missing or District column not loaded.")
+            st.warning("⚠️ Map file missing.")
 
         # ==========================================================
         # ROW 2: STANDARD CHARTS
@@ -319,37 +288,6 @@ if df is not None:
                 st.plotly_chart(fig5, use_container_width=True)
 
         # ==========================================================
-        # ROW 4: DISTRICT TREEMAP
-        # ==========================================================
-        st.markdown("---")
-        st.subheader("🧱 District Treemap (Size vs Result)")
-        st.caption(f"**Size** = Respondent Volume | **Color** = % answering '{top_ans}' (Yellow = High)")
-        
-        if dist_col in main_data.columns:
-            # --- FIX: EXCLUDE UNKNOWN FROM TREEMAP ---
-            valid_subset = main_data[main_data[dist_col] != "Unknown"]
-            
-            top_10 = valid_subset[dist_col].value_counts().head(15).index.tolist()
-            subset = valid_subset[valid_subset[dist_col].isin(top_10)]
-            
-            dist_stats_tree = pd.crosstab(subset[dist_col], subset[target_q], normalize='index') * 100
-            
-            if top_ans in dist_stats_tree.columns:
-                plot_df = dist_stats_tree[[top_ans]].reset_index()
-                plot_df.columns = ["District", "Percent"]
-                
-                tree_counts = subset[dist_col].value_counts().reset_index()
-                tree_counts.columns = ["District", "Count"]
-                final_df = pd.merge(plot_df, tree_counts, on="District")
-                
-                final_df["Label"] = final_df.apply(lambda x: f"{x['District']}<br>{x['Percent']:.1f}%", axis=1)
-
-                fig6 = px.treemap(final_df, path=["Label"], values="Count",
-                                  color="Percent", color_continuous_scale="Viridis")
-                fig6.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=400)
-                st.plotly_chart(fig6, use_container_width=True)
-
-        # ==========================================================
         # ROW 5: TABLES
         # ==========================================================
         st.markdown("---")
@@ -361,9 +299,9 @@ if df is not None:
             st.dataframe(counts, use_container_width=True, hide_index=True)
             
         with t2:
-            st.subheader(f"🏘️ District Rankings (Top % {top_ans})")
-            if dist_col in main_data.columns:
-                dist_pivot = pd.crosstab(main_data[dist_col], main_data[target_q], normalize='index') * 100
+            st.subheader(f"🗺️ Province Rankings (Top % {top_ans})")
+            if prov_col:
+                dist_pivot = pd.crosstab(main_data[prov_col], main_data[target_q], normalize='index') * 100
                 if not dist_pivot.empty:
                     dist_pivot = dist_pivot.sort_values(by=top_ans, ascending=False).head(50)
                     dist_display = dist_pivot.applymap(lambda x: f"{x:.1f}%")
