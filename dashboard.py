@@ -148,7 +148,7 @@ try:
             st.info("**Key Insight:** Wholesale & Retail Trade is the 2nd largest employer after Agriculture.")
 
     # ==============================================================================
-    # TAB 2: DATA EXPLORER (RESTORED FEATURES)
+    # TAB 2: DATA EXPLORER (CUSTOM AGE GROUPS)
     # ==============================================================================
     with tab2:
         if df is not None:
@@ -166,7 +166,7 @@ try:
             edu_col = get_col(["S4C9", "Education", "Highest class"])
             age_col = get_col(["S4C6", "Age"])
             
-            # --- FILTERS (RESTORED) ---
+            # --- FILTERS ---
             st.sidebar.markdown("## 🔍 Data Explorer Filters")
             def get_clean_list(column):
                 if column and column in df.columns:
@@ -176,14 +176,12 @@ try:
             prov_list = get_clean_list(prov_col)
             sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list)
             
-            # Age Slider (Restored)
             if age_col:
                 min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
-                sel_age = st.sidebar.slider("Age Range", min_age, max_age, (min_age, max_age))
+                sel_age = st.sidebar.slider("Age Range (Filter)", min_age, max_age, (min_age, max_age))
             
             sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col))
             sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col))
-            # Education Filter (Restored)
             sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col))
             
             # --- APPLY FILTERS ---
@@ -194,7 +192,7 @@ try:
             if sel_sex: mask = mask & df[sex_col].isin(sel_sex)
             if sel_edu: mask = mask & df[edu_col].isin(sel_edu)
             
-            # --- DASHBOARD HEADER ---
+            # --- HEADER ---
             c1, c2, c3 = st.columns(3)
             c1.metric("Filtered Database", f"{mask.sum():,.0f}")
             c2.metric("Total Records", f"{len(df):,.0f}")
@@ -210,7 +208,6 @@ try:
                                   index=questions.index(default_target) if default_target in questions else 0)
 
             if target_q:
-                # Load necessary columns including newly restored filters
                 cols_to_load = [target_q] + [c for c in [prov_col, sex_col, reg_col, age_col, edu_col] if c]
                 main_data = df.loc[mask, cols_to_load]
                 main_data[target_q] = main_data[target_q].astype(str)
@@ -219,9 +216,7 @@ try:
                 if not main_data.empty:
                     top_ans = main_data[target_q].mode()[0]
                     
-                    # =====================================================
-                    # ROW 1: THE HERO MAP (PROVINCE)
-                    # =====================================================
+                    # 1. MAP
                     st.subheader(f"🗺️ Province Heatmap: {top_ans}")
                     geojson_path = "pakistan_provinces.geojson"
                     
@@ -233,7 +228,6 @@ try:
                             map_data = prov_stats[[top_ans]].reset_index()
                             map_data.columns = ["Province", "Percent"]
                             
-                            # Draw Map
                             fig_map = px.choropleth_mapbox(
                                 map_data, geojson=pak_geojson, locations="Province",
                                 featureidkey="properties.shapeName",
@@ -242,7 +236,6 @@ try:
                                 opacity=0.7
                             )
                             
-                            # Add Text Labels (The new feature)
                             centroids = pd.DataFrame([
                                 {"Province": "Punjab", "Lat": 30.8, "Lon": 72.5},
                                 {"Province": "Sindh", "Lat": 26.0, "Lon": 68.5},
@@ -266,9 +259,7 @@ try:
                     else:
                          st.warning("⚠️ Map file missing. Please ensure 'pakistan_provinces.geojson' is uploaded.")
 
-                    # =====================================================
-                    # ROW 2: STANDARD CHARTS (RESTORED)
-                    # =====================================================
+                    # 2. CHARTS ROW 1
                     col1, col2, col3 = st.columns([1.5, 1, 1])
 
                     with col1:
@@ -298,9 +289,7 @@ try:
                             fig_pie.update_layout(showlegend=False)
                             st.plotly_chart(fig_pie, use_container_width=True)
 
-                    # =====================================================
-                    # ROW 3: REGION & AGE (RESTORED)
-                    # =====================================================
+                    # 3. CHARTS ROW 2 (Updated Age Logic)
                     col4, col5 = st.columns([1, 1.5])
 
                     with col4:
@@ -315,21 +304,22 @@ try:
                     with col5:
                         st.markdown("**📈 Age Trends (%)**")
                         if age_col:
+                            # --- CUSTOM AGE GROUP LOGIC ---
                             chart_data = main_data.copy()
-                            chart_data['AgeGrp'] = pd.cut(chart_data[age_col], bins=[0,18,30,45,60,100], 
-                                                        labels=['<18','18-30','31-45','46-60','60+'])
-                            age_grp = chart_data.groupby(['AgeGrp', target_q], observed=True).size().reset_index(name='Count')
+                            # Updated bins and labels as requested
+                            bins = [0, 4, 5, 9, 12, 15, 18, 24, 30, 40, 50, 60, 65, 200]
+                            labels = ['0-4', '4-5', '5-9', '9-12', '12-15', '15-18', '18-24', '25-30', '30-40', '40-50', '50-60', '60-65', '65+']
                             
-                            # Calculate percentages for area chart
+                            chart_data['AgeGrp'] = pd.cut(chart_data[age_col], bins=bins, labels=labels, include_lowest=True)
+                            
+                            age_grp = chart_data.groupby(['AgeGrp', target_q], observed=True).size().reset_index(name='Count')
                             age_totals = age_grp.groupby('AgeGrp', observed=True)['Count'].transform('sum')
                             age_grp['%'] = (age_grp['Count'] / age_totals * 100).fillna(0)
                             
                             fig_age = px.area(age_grp, x="AgeGrp", y="%", color=target_q, markers=True)
                             st.plotly_chart(fig_age, use_container_width=True)
 
-                    # =====================================================
-                    # ROW 4: DATA TABLES (RESTORED)
-                    # =====================================================
+                    # 4. TABLES
                     st.markdown("---")
                     st.subheader("📋 Detailed Data View")
                     t1, t2 = st.columns(2)
