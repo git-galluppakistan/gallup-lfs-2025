@@ -34,8 +34,7 @@ st.title("📊 Gallup Pakistan: Labour Force Survey 2024-25")
 
 # --- 2. MEMORY-OPTIMIZED DATA LOADERS ---
 
-# A. Load GeoJSON separately (Cached)
-@st.cache_data(ttl=3600)  # Cache map for 1 hour
+@st.cache_data(ttl=3600)
 def load_geojson():
     geojson_path = "pakistan_provinces.geojson"
     if os.path.exists(geojson_path):
@@ -43,8 +42,6 @@ def load_geojson():
             return json.load(f)
     return None
 
-# B. Load Main Data (Shared Resource)
-# We use cache_resource to keep ONE copy in memory for all users
 @st.cache_resource(show_spinner="Loading Heavy Dataset...", ttl="2h")
 def load_data_optimized():
     try:
@@ -54,33 +51,25 @@ def load_data_optimized():
             return None
 
         chunks = []
-        # Load in chunks to manage instant memory spikes
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
-            # Clean column names
             chunk.columns = chunk.columns.str.strip()
             
-            # Convert to CATEGORY to save 80% RAM
             for col in chunk.columns:
                 chunk[col] = chunk[col].astype('category')
             
-            # Numeric conversion for Age
             age_col = next((c for c in chunk.columns if c in ['S4C6', 'Age']), None)
             if age_col:
                 chunk[age_col] = pd.to_numeric(chunk[age_col], errors='coerce')
-            
             chunks.append(chunk)
         
         if not chunks:
             return None
 
-        # Combine chunks
         df = pd.concat(chunks, axis=0)
-        
-        # Free up chunk memory immediately
         del chunks
         gc.collect()
 
-        # --- PRE-PROCESSING (Done once) ---
+        # --- PRE-PROCESSING ---
         
         # 1. Province Map
         province_map = {
@@ -109,12 +98,13 @@ def load_data_optimized():
             if "PCode" in df.columns:
                 df["District"] = df["PCode"].astype(str).map(dist_map).astype('category')
 
-        # 3. Global Value Fixes (Yes/No)
+        # 3. Global Value Fixes (CRITICAL FIX FOR S4C81)
         target_cols = ['S4C81', 'S4C82'] 
         for c in target_cols:
             if c in df.columns:
                 df[c] = df[c].astype(str).str.strip().replace({
                     "1": "Yes", "1.0": "Yes", "01": "Yes",
+                    "Yes' 2'No": "Yes",  # <--- FIXED CORRUPTED DATA HERE
                     "2": "No",  "2.0": "No",  "02": "No"
                 }).astype("category")
 
@@ -133,11 +123,8 @@ def load_data_optimized():
         st.error(f"⚠️ Data Loading Error: {e}")
         return None
 
-# Load Data
 df = load_data_optimized()
 pak_geojson = load_geojson()
-
-# Garbage Collection after load
 gc.collect()
 
 # --- 3. DASHBOARD TABS ---
@@ -162,7 +149,6 @@ try:
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Employment to Population Ratio")
-            
             emp_pop_data = pd.DataFrame({
                 "Province": ["Pakistan (Avg)", "Punjab", "Sindh", "Balochistan", "KP"],
                 "Ratio": [43.0, 45.4, 42.3, 39.3, 37.2]
@@ -266,12 +252,12 @@ try:
             # --- QUESTION SELECTOR ---
             ignore = [prov_col, reg_col, sex_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode", "District"]
             questions = [c for c in df.columns if c not in ignore]
-            default_target = "Marital Status (S4C7)"
+            default_target = "Marital status (S4C7)"
             target_q = st.selectbox("Select Variable to Analyze:", questions, 
                                   index=questions.index(default_target) if default_target in questions else 0)
 
             if target_q:
-                # --- HEADER FOR TITLE (OUTSIDE CHARTS) ---
+                # HEADER FOR QUESTION (Outside charts)
                 st.markdown(f"### 🧐 Analysis of: {target_q}")
                 st.markdown("---")
 
@@ -280,10 +266,11 @@ try:
                 main_data[target_q] = main_data[target_q].astype(str)
                 main_data = main_data[~main_data[target_q].isin(["#NULL!", "nan", "None", "DK", "NR"])]
                 
-                # --- SAFETY PATCH ---
+                # --- SAFETY PATCH (Second Layer for Yes/No) ---
                 if "S4C81" in target_q or "S4C82" in target_q:
                     main_data[target_q] = main_data[target_q].astype(str).replace({
                         "1": "Yes", "1.0": "Yes", "01": "Yes",
+                        "Yes' 2'No": "Yes", # <--- EXTRA SAFETY
                         "2": "No",  "2.0": "No",  "02": "No"
                     })
 
@@ -292,7 +279,6 @@ try:
                     
                     # 1. MAP
                     st.subheader(f"🗺️ Province Heatmap: {top_ans}")
-                    
                     if pak_geojson and prov_col:
                         prov_stats = pd.crosstab(main_data[prov_col], main_data[target_q], normalize='index') * 100
                         if top_ans in prov_stats.columns:
@@ -306,7 +292,7 @@ try:
                                 mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
                                 opacity=0.7
                             )
-                            
+                            # Add Labels
                             centroids = pd.DataFrame([
                                 {"Province": "Punjab", "Lat": 30.8, "Lon": 72.5},
                                 {"Province": "Sindh", "Lat": 26.0, "Lon": 68.5},
@@ -316,7 +302,6 @@ try:
                                 {"Province": "Azad Jammu & Kashmir", "Lat": 34.0, "Lon": 73.8},
                                 {"Province": "Islamabad Capital Territory", "Lat": 33.7, "Lon": 73.1}
                             ])
-                            
                             label_data = pd.merge(centroids, map_data, on="Province", how="inner")
                             if not label_data.empty:
                                 fig_map.add_trace(go.Scattermapbox(
@@ -324,11 +309,10 @@ try:
                                     text=label_data.apply(lambda x: f"{x['Percent']:.1f}%", axis=1),
                                     textfont=dict(size=14, color='black'), showlegend=False, hoverinfo='none'
                                 ))
-
                             fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=500)
                             st.plotly_chart(fig_map, use_container_width=True)
                     else:
-                         st.warning("⚠️ Map file missing. Please ensure 'pakistan_provinces.geojson' is uploaded.")
+                         st.warning("⚠️ Map file missing.")
 
                     # 2. CHARTS ROW 1
                     col1, col2, col3 = st.columns([1.5, 1, 1])
@@ -341,7 +325,7 @@ try:
                         fig_bar = px.bar(counts, x="Answer", y="%", color="Answer", 
                                         text=counts["%"].apply(lambda x: f"{x:.1f}%"),
                                         color_discrete_sequence=px.colors.qualitative.Bold)
-                        # FORCE EMPTY TITLE
+                        # No title inside
                         fig_bar.update_layout(showlegend=False, title_text="")
                         st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -352,8 +336,8 @@ try:
                             prov_totals = prov_grp.groupby(prov_col, observed=True)['Count'].transform('sum')
                             prov_grp['%'] = (prov_grp['Count'] / prov_totals * 100).fillna(0)
                             fig_prov = px.bar(prov_grp, x=prov_col, y="%", color=target_q, barmode="stack")
-                            # FORCE EMPTY TITLE
-                            fig_prov.update_layout(showlegend=False, yaxis_title="%", title_text="")
+                            # LEGEND ON, TITLE OFF
+                            fig_prov.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.2), yaxis_title="%", title_text="")
                             st.plotly_chart(fig_prov, use_container_width=True)
 
                     with col3:
@@ -362,7 +346,7 @@ try:
                             g_counts = main_data[sex_col].value_counts().reset_index()
                             g_counts.columns = ["Gender", "Count"]
                             fig_pie = px.pie(g_counts, names="Gender", values="Count", hole=0.5)
-                            # FORCE EMPTY TITLE
+                            # LEGEND ON, TITLE OFF
                             fig_pie.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.1), title_text="")
                             st.plotly_chart(fig_pie, use_container_width=True)
 
@@ -376,7 +360,6 @@ try:
                             reg_counts.columns = ["Region", "Count"]
                             fig_reg = px.pie(reg_counts, names="Region", values="Count", 
                                           color_discrete_sequence=px.colors.qualitative.Set3)
-                            # FORCE EMPTY TITLE
                             fig_reg.update_layout(title_text="")
                             st.plotly_chart(fig_reg, use_container_width=True)
 
@@ -399,8 +382,8 @@ try:
                             fig_age = px.area(age_grp, x="AgeGrp", y="%", color=target_q, markers=True,
                                             category_orders={"AgeGrp": labels}) 
                             fig_age.update_xaxes(type='category') 
-                            # FORCE EMPTY TITLE
-                            fig_age.update_layout(title_text="")
+                            # NO TITLE to prevent shrinking
+                            fig_age.update_layout(title_text="", showlegend=True, legend=dict(orientation="h", y=-0.2))
                             st.plotly_chart(fig_age, use_container_width=True)
 
                     # 4. TABLES
