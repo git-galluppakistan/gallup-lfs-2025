@@ -63,7 +63,7 @@ def load_data():
         del chunks
         gc.collect()
 
-        # --- B. PROVINCE STANDARDIZATION ---
+        # --- B. PROVINCE STANDARDIZATION (OLD SCRIPT LOGIC) ---
         province_map = {
             "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
             "BALOUCHISTAN": "Balochistan", "Balouchistan": "Balochistan",
@@ -138,18 +138,18 @@ def reset_filters():
 # --- 4. EXCEL EXPORT (Robust) ---
 def to_excel(df_input):
     output = BytesIO()
-    # Tries to use XlsxWriter (if installed), falls back to default if not
     try:
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df_input.to_excel(writer, index=True, sheet_name='Sheet1')
     except:
+        # Fallback to default engine if xlsxwriter fails/missing
         with pd.ExcelWriter(output) as writer:
             df_input.to_excel(writer, index=True, sheet_name='Sheet1')
     return output.getvalue()
 
 # --- 5. DASHBOARD MAIN ---
 if df is not None:
-    # --- TABS (Defined OUTSIDE Try/Except to prevent resetting) ---
+    # --- TABS ---
     tab1, tab2 = st.tabs(["📑 Executive Summary", "🔍 Data Explorer (Full Dashboard)"])
 
     # === TAB 1: SUMMARY ===
@@ -256,11 +256,14 @@ if df is not None:
             except:
                 def_idx = 0
             
-            # ADDING KEY to prevent reset
-            target = st.selectbox("Select Variable to Analyze:", questions, index=def_idx, key="main_target_selector")
+            # REMOVED KEY to prevent state crash
+            target = st.selectbox("Select Variable to Analyze:", questions, index=def_idx)
             
-            # DATA PREP
+            # DATA PREP (Efficient)
             main_data = df.loc[mask].copy()
+            # Explicit GC
+            gc.collect()
+
             main_data[target] = main_data[target].astype(str)
             main_data = main_data[~main_data[target].isin(["#NULL!", "nan", "None", "DK", "NR"])]
             
@@ -272,8 +275,8 @@ if df is not None:
                 if len(opts) > 0:
                     mode_val = main_data[target].mode()[0]
                     if mode_val not in opts: mode_val = opts[0]
-                    # ADDING KEY to prevent reset
-                    map_choice = st.selectbox("Select Answer to Map:", opts, index=opts.index(mode_val), key="map_choice_selector")
+                    # REMOVED KEY to prevent state crash
+                    map_choice = st.selectbox("Select Answer to Map:", opts, index=opts.index(mode_val))
                 else:
                     map_choice = None
                 
@@ -383,14 +386,18 @@ if df is not None:
                     if map_choice in d_stats.columns:
                         final_table = d_stats.sort_values(by=map_choice, ascending=False)
                         
-                        # EXCEL BUTTON
-                        excel_data = to_excel(final_table)
-                        t_btn.download_button(
-                            label="📥 Download Excel",
-                            data=excel_data,
-                            file_name=f'gallup_data_{map_choice}.xlsx',
-                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                        )
+                        # EXCEL BUTTON (Safe Wrapper)
+                        try:
+                            excel_data = to_excel(final_table)
+                            t_btn.download_button(
+                                label="📥 Download Excel",
+                                data=excel_data,
+                                file_name=f'gallup_data_{map_choice}.xlsx',
+                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                            )
+                        except Exception as e:
+                            t_btn.error("Export Failed")
+                        
                         st.dataframe(final_table.style.format("{:.1f}%"), use_container_width=True)
         except Exception as e:
             st.error(f"Error in Tab 2: {e}")
