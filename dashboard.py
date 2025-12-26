@@ -58,9 +58,13 @@ def load_geojson_dist():
 
 @st.cache_resource(show_spinner="Loading Heavy Dataset...", ttl="2h")
 def load_data_optimized():
+    df = None
     try:
+        # 1. LOAD MAIN DATA
         file_name = "data.zip" if os.path.exists("data.zip") else "Data.zip"
-        if not os.path.exists(file_name): return None
+        if not os.path.exists(file_name): 
+            st.error("❌ 'data.zip' file missing from repository.")
+            return None
 
         chunks = []
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
@@ -77,7 +81,8 @@ def load_data_optimized():
         gc.collect()
 
         # --- PRE-PROCESSING ---
-        # 1. Province Map
+        
+        # 2. Province Map (Standard)
         province_map = {
             "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
             "BALOUCHISTAN": "Balochistan", "Balouchistan": "Balochistan",
@@ -91,34 +96,38 @@ def load_data_optimized():
             if "Province" in col:
                 df[col] = df[col].astype(str).map(province_map).fillna(df[col]).astype("category")
 
-        # 2. District Mapping (UPDATED: Loads MULTIPLE files now)
-        # We now check ALL these files and combine them. This fixes Lahore automatically.
-        possible_files = [
-            "district_mapping.csv", 
-            "DSTT.xlsx - Sheet1.csv", 
-            "lahore-district-mapping-file.xlsx - Lahore.csv" # <--- Your new file
-        ]
-        
-        dfs_to_merge = []
-        for f in possible_files:
-            if os.path.exists(f):
-                try:
-                    # Read all mapping files found
-                    temp_df = pd.read_csv(f, dtype=str)
-                    if "PCode" in temp_df.columns and "District" in temp_df.columns:
-                        dfs_to_merge.append(temp_df)
-                except:
-                    pass
-        
-        if dfs_to_merge:
-            # Combine all mapping files into one big map
-            combined_map_df = pd.concat(dfs_to_merge, ignore_index=True)
-            dist_map = combined_map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
+        # 3. DISTRICT MAPPING (SAFE MODE)
+        # We wrap this in a separate try/except so if mapping fails, the Dashboard STILL LOADS.
+        try:
+            possible_files = [
+                "district_mapping.csv", 
+                "DSTT.xlsx - Sheet1.csv", 
+                "lahore-district-mapping-file.xlsx - Lahore.csv" # Ensure this matches GitHub EXACTLY
+            ]
             
-            if "PCode" in df.columns:
-                df["District"] = df["PCode"].astype(str).map(dist_map).astype('category')
+            dfs_to_merge = []
+            for f in possible_files:
+                if os.path.exists(f):
+                    temp = pd.read_csv(f, dtype=str)
+                    if "PCode" in temp.columns and "District" in temp.columns:
+                        dfs_to_merge.append(temp)
+            
+            if dfs_to_merge:
+                combined_map_df = pd.concat(dfs_to_merge, ignore_index=True)
+                dist_map = combined_map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
+                
+                # Manual Fallback for Lahore if files miss it
+                dist_map['352'] = 'Lahore'
+                dist_map['201'] = 'Lahore'
+                
+                if "PCode" in df.columns:
+                    df["District"] = df["PCode"].astype(str).map(dist_map).astype('category')
+                    
+        except Exception as e:
+            # If mapping fails, just print a warning but KEEP GOING
+            st.warning(f"⚠️ District mapping failed partially (Dashboard still running): {e}")
 
-        # 3. Global Value Fixes
+        # 4. Global Value Fixes
         target_cols = ['S4C81', 'S4C82'] 
         for c in target_cols:
             if c in df.columns:
@@ -127,7 +136,7 @@ def load_data_optimized():
                     "2": "No",  "2.0": "No",  "02": "No"
                 }).astype("category")
 
-        # 4. Codebook Rename
+        # 5. Codebook Rename
         if os.path.exists("code.csv"):
             codes = pd.read_csv("code.csv")
             rename_dict = {}
@@ -139,7 +148,7 @@ def load_data_optimized():
         return df
 
     except Exception as e:
-        st.error(f"⚠️ Data Loading Error: {e}")
+        st.error(f"🚨 CRITICAL DATA LOAD ERROR: {e}")
         return None
 
 df = load_data_optimized()
@@ -148,73 +157,73 @@ pak_dist_json = load_geojson_dist()
 gc.collect()
 
 # --- 3. DASHBOARD TABS ---
-try:
-    tab1, tab2 = st.tabs(["📑 Executive Summary", "🔍 Data Explorer (Full Dashboard)"])
+if df is not None:
+    try:
+        tab1, tab2 = st.tabs(["📑 Executive Summary", "🔍 Data Explorer (Full Dashboard)"])
 
-    # ==============================================================================
-    # TAB 1: EXECUTIVE SUMMARY
-    # ==============================================================================
-    with tab1:
-        st.markdown("### 📌 Key Findings: Labour Force Survey 2024-25")
-        st.caption("Source: Official Key Insights Report")
-        
-        st.link_button(
-            "📥 Download Full Questionnaire (PDF)", 
-            "https://www.pbs.gov.pk/wp-content/uploads/2020/07/Questionnaire-of-LFS-2024-25-Final.pdf",
-            help="Click to open the official PBS Questionnaire PDF"
-        )
-        st.markdown("---")
+        # ==============================================================================
+        # TAB 1: EXECUTIVE SUMMARY
+        # ==============================================================================
+        with tab1:
+            st.markdown("### 📌 Key Findings: Labour Force Survey 2024-25")
+            st.caption("Source: Official Key Insights Report")
+            
+            st.link_button(
+                "📥 Download Full Questionnaire (PDF)", 
+                "https://www.pbs.gov.pk/wp-content/uploads/2020/07/Questionnaire-of-LFS-2024-25-Final.pdf",
+                help="Click to open the official PBS Questionnaire PDF"
+            )
+            st.markdown("---")
 
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-        kpi1.metric("Total Labour Force", "83.1 Million", "2024-25")
-        kpi2.metric("Employed", "77.2 Million", "92.9% of LF")
-        kpi3.metric("Unemployed", "~4.0 Million", "7.1% Rate")
-        kpi4.metric("Participation Rate", "44.7%", "National Avg")
+            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+            kpi1.metric("Total Labour Force", "83.1 Million", "2024-25")
+            kpi2.metric("Employed", "77.2 Million", "92.9% of LF")
+            kpi3.metric("Unemployed", "~4.0 Million", "7.1% Rate")
+            kpi4.metric("Participation Rate", "44.7%", "National Avg")
 
-        st.markdown("---")
+            st.markdown("---")
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Employment to Population Ratio")
-            emp_pop_data = pd.DataFrame({
-                "Province": ["Pakistan (Avg)", "Punjab", "Sindh", "Balochistan", "KP"],
-                "Ratio": [43.0, 45.4, 42.3, 39.3, 37.2]
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("Employment to Population Ratio")
+                emp_pop_data = pd.DataFrame({
+                    "Province": ["Pakistan (Avg)", "Punjab", "Sindh", "Balochistan", "KP"],
+                    "Ratio": [43.0, 45.4, 42.3, 39.3, 37.2]
+                })
+                fig_ep = px.bar(emp_pop_data, x="Province", y="Ratio", text="Ratio",
+                                color="Province", 
+                                color_discrete_sequence=px.colors.qualitative.Prism)
+                fig_ep.update_traces(texttemplate='%{text}%', textposition='outside')
+                fig_ep.update_layout(yaxis_range=[0, 60], showlegend=False)
+                st.plotly_chart(fig_ep, use_container_width=True)
+
+            with c2:
+                st.subheader("Key Labour Force Metrics")
+                rates_data = pd.DataFrame({
+                    "Metric": ["Participation Rate", "Employment Rate", "Unemployment Rate"],
+                    "Value": [44.7, 92.9, 7.1]
+                })
+                fig_rates = px.pie(rates_data, names="Metric", values="Value", hole=0.6,
+                                color_discrete_sequence=px.colors.qualitative.Pastel)
+                st.plotly_chart(fig_rates, use_container_width=True)
+
+            st.subheader("🏢 Employment by Major Industry")
+            ind_data = pd.DataFrame({
+                "Industry": ["Agriculture", "Manufacturing", "Wholesale & Retail", "Construction", "Transport", "Other"],
+                "Share": [40.0, 25.4, 16.0, 11.0, 6.6, 1.0] 
             })
-            fig_ep = px.bar(emp_pop_data, x="Province", y="Ratio", text="Ratio",
-                            color="Province", 
-                            color_discrete_sequence=px.colors.qualitative.Prism)
-            fig_ep.update_traces(texttemplate='%{text}%', textposition='outside')
-            fig_ep.update_layout(yaxis_range=[0, 60], showlegend=False)
-            st.plotly_chart(fig_ep, use_container_width=True)
+            ind_data = ind_data.sort_values(by="Share", ascending=True)
+            fig_ind = px.bar(ind_data, x="Share", y="Industry", orientation='h', text="Share",
+                            color="Share", color_continuous_scale="Blues")
+            fig_ind.update_traces(texttemplate='%{text}%', textposition='outside')
+            fig_ind.update_layout(xaxis_range=[0, 50], height=400)
+            st.plotly_chart(fig_ind, use_container_width=True)
+            st.info("**Key Insight:** Manufacturing is the 2nd largest employer (25.4%), followed by Wholesale & Retail Trade (16.0%).")
 
-        with c2:
-            st.subheader("Key Labour Force Metrics")
-            rates_data = pd.DataFrame({
-                "Metric": ["Participation Rate", "Employment Rate", "Unemployment Rate"],
-                "Value": [44.7, 92.9, 7.1]
-            })
-            fig_rates = px.pie(rates_data, names="Metric", values="Value", hole=0.6,
-                               color_discrete_sequence=px.colors.qualitative.Pastel)
-            st.plotly_chart(fig_rates, use_container_width=True)
-
-        st.subheader("🏢 Employment by Major Industry")
-        ind_data = pd.DataFrame({
-            "Industry": ["Agriculture", "Manufacturing", "Wholesale & Retail", "Construction", "Transport", "Other"],
-            "Share": [40.0, 25.4, 16.0, 11.0, 6.6, 1.0] 
-        })
-        ind_data = ind_data.sort_values(by="Share", ascending=True)
-        fig_ind = px.bar(ind_data, x="Share", y="Industry", orientation='h', text="Share",
-                         color="Share", color_continuous_scale="Blues")
-        fig_ind.update_traces(texttemplate='%{text}%', textposition='outside')
-        fig_ind.update_layout(xaxis_range=[0, 50], height=400)
-        st.plotly_chart(fig_ind, use_container_width=True)
-        st.info("**Key Insight:** Manufacturing is the 2nd largest employer (25.4%), followed by Wholesale & Retail Trade (16.0%).")
-
-    # ==============================================================================
-    # TAB 2: DATA EXPLORER
-    # ==============================================================================
-    with tab2:
-        if df is not None:
+        # ==============================================================================
+        # TAB 2: DATA EXPLORER
+        # ==============================================================================
+        with tab2:
             # --- HELPER FUNCTIONS ---
             def get_col(candidates):
                 for c in candidates:
@@ -442,8 +451,7 @@ try:
                                     prov_pivot = prov_pivot.sort_values(by=map_choice, ascending=False)
                                 st.dataframe(prov_pivot.style.format("{:.1f}%"), use_container_width=True)
 
-        else:
-            st.warning("⚠️ Data file not found. Please upload 'data.zip' to GitHub.")
-
-except Exception as e:
-    st.error(f"🚨 Critical Dashboard Error: {e}")
+    except Exception as e:
+        st.error(f"🚨 Critical Dashboard Error: {e}")
+else:
+    st.error("⚠️ Data failed to load. Please check file formatting.")
