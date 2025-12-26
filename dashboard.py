@@ -49,9 +49,7 @@ def load_data():
 
         chunks = []
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
-            # Clean Headers
             chunk.columns = chunk.columns.str.strip()
-            
             for col in chunk.columns:
                 chunk[col] = chunk[col].astype('category')
             
@@ -65,8 +63,7 @@ def load_data():
         del chunks
         gc.collect()
 
-        # --- B. PROVINCE STANDARDIZATION (FROM OLD SCRIPT) ---
-        # This exact dictionary ensures KP maps correctly
+        # --- B. PROVINCE STANDARDIZATION ---
         province_map = {
             "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
             "BALOUCHISTAN": "Balochistan", "Balouchistan": "Balochistan",
@@ -78,7 +75,6 @@ def load_data():
         }
         for col in df.columns:
             if "Province" in col:
-                # Use simple mapping like the old script
                 df[col] = df[col].astype(str).map(province_map).fillna(df[col]).astype("category")
 
         # --- C. DISTRICT MAPPING ---
@@ -94,12 +90,12 @@ def load_data():
             combined_map = pd.concat(dfs_to_merge, ignore_index=True)
             dist_map = combined_map.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
             
-            # Manual Fixes for Lahore (Just in case)
+            # Manual Fixes
             dist_map['352'] = 'LAHORE'
             dist_map['201'] = 'LAHORE'
             dist_map['25121030'] = 'LAHORE'
 
-            # Map & FORCE UPPER CASE (Matches GeoJSON 'districts' key)
+            # Map & FORCE UPPER CASE
             df["District"] = df["PCode"].astype(str).map(dist_map)
             df["District"] = df["District"].fillna("Unknown")
             df["District"] = df["District"].astype(str).str.upper().str.strip()
@@ -139,21 +135,26 @@ def reset_filters():
     st.session_state['sex_key'] = []
     st.session_state['edu_key'] = []
 
-# --- 4. EXCEL EXPORT ---
+# --- 4. EXCEL EXPORT (Robust) ---
 def to_excel(df_input):
     output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df_input.to_excel(writer, index=True, sheet_name='Sheet1')
+    # Tries to use XlsxWriter (if installed), falls back to default if not
+    try:
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df_input.to_excel(writer, index=True, sheet_name='Sheet1')
+    except:
+        with pd.ExcelWriter(output) as writer:
+            df_input.to_excel(writer, index=True, sheet_name='Sheet1')
     return output.getvalue()
 
 # --- 5. DASHBOARD MAIN ---
 if df is not None:
-    try:
-        # --- TABS ---
-        tab1, tab2 = st.tabs(["📑 Executive Summary", "🔍 Data Explorer (Full Dashboard)"])
+    # --- TABS (Defined OUTSIDE Try/Except to prevent resetting) ---
+    tab1, tab2 = st.tabs(["📑 Executive Summary", "🔍 Data Explorer (Full Dashboard)"])
 
-        # === TAB 1: SUMMARY ===
-        with tab1:
+    # === TAB 1: SUMMARY ===
+    with tab1:
+        try:
             st.markdown("### 📌 Key Findings: Labour Force Survey 2024-25")
             st.caption("Source: Official Key Insights Report")
             
@@ -171,7 +172,6 @@ if df is not None:
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader("Employment Ratio")
-                # Use dynamic data if available, else static
                 if "Province" in df.columns:
                     emp_counts = df["Province"].value_counts().reset_index()
                     emp_counts.columns = ["Province", "Count"]
@@ -183,9 +183,12 @@ if df is not None:
                 pie_data = pd.DataFrame({"Metric": ["Employed", "Unemployed"], "Value": [92.9, 7.1]})
                 fig = px.pie(pie_data, names="Metric", values="Value", hole=0.5)
                 st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+             st.error(f"Error in Tab 1: {e}")
 
-        # === TAB 2: EXPLORER ===
-        with tab2:
+    # === TAB 2: EXPLORER ===
+    with tab2:
+        try:
             # FILTERS
             st.sidebar.markdown("## 🔍 Data Explorer Filters")
             if st.sidebar.button("🔄 Reset All Filters", on_click=reset_filters): st.rerun()
@@ -252,7 +255,9 @@ if df is not None:
                 def_idx = questions.index(default_target)
             except:
                 def_idx = 0
-            target = st.selectbox("Select Variable to Analyze:", questions, index=def_idx)
+            
+            # ADDING KEY to prevent reset
+            target = st.selectbox("Select Variable to Analyze:", questions, index=def_idx, key="main_target_selector")
             
             # DATA PREP
             main_data = df.loc[mask].copy()
@@ -267,14 +272,15 @@ if df is not None:
                 if len(opts) > 0:
                     mode_val = main_data[target].mode()[0]
                     if mode_val not in opts: mode_val = opts[0]
-                    map_choice = st.selectbox("Select Answer to Map:", opts, index=opts.index(mode_val))
+                    # ADDING KEY to prevent reset
+                    map_choice = st.selectbox("Select Answer to Map:", opts, index=opts.index(mode_val), key="map_choice_selector")
                 else:
                     map_choice = None
                 
                 # --- MAPS ---
                 m1, m2 = st.columns(2)
                 
-                # PROVINCE MAP (WITH LABELS & PERCENTAGES)
+                # PROVINCE MAP
                 with m1:
                     if map_choice:
                         st.subheader(f"Province: {map_choice}")
@@ -291,7 +297,7 @@ if df is not None:
                                     mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
                                     opacity=0.7
                                 )
-                                # ADD PERCENTAGE LABELS (Fixed Centroids)
+                                # LABELS
                                 centroids = pd.DataFrame([
                                     {"Province": "Punjab", "Lat": 31.1, "Lon": 72.7},
                                     {"Province": "Sindh", "Lat": 25.9, "Lon": 68.5},
@@ -322,8 +328,6 @@ if df is not None:
                             if map_choice in d_stats.columns:
                                 d_map = d_stats[[map_choice]].reset_index()
                                 d_map.columns = ["District", "Percent"]
-                                
-                                # UPPERCASE MATCHING for Districts
                                 d_map["District"] = d_map["District"].astype(str).str.upper().str.strip()
 
                                 fig = px.choropleth_mapbox(
@@ -369,7 +373,7 @@ if df is not None:
                         fig.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.1))
                         st.plotly_chart(fig, use_container_width=True)
 
-                # --- TABLES & DOWNLOAD ---
+                # --- TABLES ---
                 st.markdown("---")
                 t_head, t_btn = st.columns([4, 1])
                 t_head.subheader("📋 Detailed Data View")
@@ -388,10 +392,9 @@ if df is not None:
                             mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                         )
                         st.dataframe(final_table.style.format("{:.1f}%"), use_container_width=True)
-
-    except Exception as e:
-        st.error(f"🚨 DASHBOARD CRASHED: {e}")
-        st.code(traceback.format_exc())
+        except Exception as e:
+            st.error(f"Error in Tab 2: {e}")
+            st.code(traceback.format_exc())
 
 else:
     st.error(f"Data Load Failed: {status}")
