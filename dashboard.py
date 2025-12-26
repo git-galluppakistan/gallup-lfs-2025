@@ -23,20 +23,17 @@ st.markdown("""
 
 st.title("📊 Gallup Pakistan: Labour Force Survey 2024-25")
 
-# --- 2. AGGRESSIVE CLEANING FUNCTIONS ---
-def clean_pcode(x):
-    """Removes .0, spaces, and converts to string"""
-    if pd.isna(x) or str(x).lower() in ['nan', 'none', '']:
-        return None
-    s = str(x).strip()
-    if "." in s:
-        s = s.split(".")[0]
-    return s
-
-# --- 3. DATA LOADERS ---
+# --- 2. DATA LOADERS ---
 @st.cache_data(ttl=3600)
 def load_geojson_dist():
     path = "pakistan_districts.geojson" 
+    if os.path.exists(path):
+        with open(path) as f: return json.load(f)
+    return None
+
+@st.cache_data(ttl=3600)
+def load_geojson_prov():
+    path = "pakistan_provinces.geojson" 
     if os.path.exists(path):
         with open(path) as f: return json.load(f)
     return None
@@ -50,50 +47,56 @@ def load_data():
 
         chunks = []
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
-            # Optimize columns
             for col in chunk.columns:
                 chunk[col] = chunk[col].astype('category')
-            # Clean PCode IMMEDIATELY upon load
-            if "PCode" in chunk.columns:
-                chunk["PCode"] = chunk["PCode"].apply(clean_pcode).astype('category')
             chunks.append(chunk)
         
         df = pd.concat(chunks, axis=0)
         del chunks
         gc.collect()
 
-        # B. Load & Merge Mappings (Aggressive Fix)
+        # B. Load Mappings
         possible_files = ["district_mapping.csv", "DSTT.xlsx - Sheet1.csv", "lahore-district-mapping-file.xlsx - Lahore.csv"]
         dfs_to_merge = []
         for f in possible_files:
             if os.path.exists(f):
                 temp = pd.read_csv(f, dtype=str)
                 if "PCode" in temp.columns and "District" in temp.columns:
-                    # Clean Mapping PCode to match Data PCode
-                    temp["PCode"] = temp["PCode"].apply(clean_pcode)
                     dfs_to_merge.append(temp)
         
         if dfs_to_merge and "PCode" in df.columns:
             combined_map = pd.concat(dfs_to_merge, ignore_index=True)
-            # Create Dictionary
+            
+            # CLEANING: Match PCode formats
+            combined_map["PCode"] = combined_map["PCode"].astype(str).str.split('.').str[0].str.strip()
+            df["PCode"] = df["PCode"].astype(str).str.split('.').str[0].str.strip()
+
             dist_map = combined_map.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
             
             # Manual Fixes
-            dist_map['352'] = 'Lahore'
-            dist_map['201'] = 'Lahore'
-            dist_map['25121030'] = 'Lahore' # From your uploaded file
+            dist_map['352'] = 'LAHORE'
+            dist_map['201'] = 'LAHORE'
+            dist_map['25121030'] = 'LAHORE'
 
-            # Map & Title Case
+            # Map & FORCE UPPER CASE to match GeoJSON
             df["District"] = df["PCode"].map(dist_map)
-            df["District"] = df["District"].astype(str).str.title().str.strip() # "LAHORE" -> "Lahore"
+            df["District"] = df["District"].astype(str).str.upper().str.strip()
             
-            # Remove "Nan" strings
-            df.loc[df["District"] == "Nan", "District"] = np.nan
+            # Convert back to category
             df["District"] = df["District"].astype('category')
 
         # C. Global Fixes
         if "S4C81" in df.columns:
             df["S4C81"] = df["S4C81"].astype(str).replace({"1": "Yes", "2": "No", "Yes' 2'No": "Yes"}).astype("category")
+
+        # D. Codebook Rename
+        if os.path.exists("code.csv"):
+            codes = pd.read_csv("code.csv")
+            rename_dict = {}
+            for code, label in zip(codes.iloc[:, 0], codes.iloc[:, 1]):
+                if code not in ['Province', 'Region', 'RSex', 'S4C5', 'S4C9', 'S4C6', 'District']:
+                    rename_dict[code] = f"{label} ({code})"
+            df.rename(columns=rename_dict, inplace=True)
 
         return df, "Success"
 
@@ -102,96 +105,163 @@ def load_data():
 
 df, status = load_data()
 pak_dist_json = load_geojson_dist()
+pak_prov_json = load_geojson_prov()
 
-# --- 4. DEBUGGER SECTION (Use this to find the error!) ---
-with st.expander("🛠️ DEBUGGER (Expand if Map is Blank)", expanded=False):
-    c1, c2, c3 = st.columns(3)
-    if df is not None:
-        c1.write("**Data PCodes (Sample):**")
-        c1.write(df['PCode'].unique().tolist()[:5])
-        
-        c1.write("**Mapped Districts (Sample):**")
-        if "District" in df.columns:
-            c1.write(df['District'].unique().tolist()[:5])
-        else:
-            c1.error("No District Column Created!")
+# --- 3. SESSION STATE FOR RESET ---
+if 'reset_trigger' not in st.session_state:
+    st.session_state['reset_trigger'] = False
 
-    if pak_dist_json:
-        c2.write("**GeoJSON Keys Found:**")
-        # Check the first feature to see what properties exist
-        props = pak_dist_json['features'][0]['properties']
-        c2.write(list(props.keys()))
-        
-        c2.write("**GeoJSON District Names (Sample):**")
-        # Try to find the name key
-        name_key = next((k for k in props.keys() if k in ['districts', 'DISTRICT', 'shapeName', 'NAME_2', 'name']), None)
-        if name_key:
-            sample_names = [f['properties'][name_key] for f in pak_dist_json['features'][:5]]
-            c2.write(sample_names)
-            st.session_state['geo_key'] = name_key # Store for main app
-        else:
-            c2.error("Could not find a Name key in GeoJSON!")
-            st.session_state['geo_key'] = None
+def reset_filters():
+    st.session_state['prov_key'] = []
+    st.session_state['dist_key'] = []
+    st.session_state['reg_key'] = []
+    st.session_state['sex_key'] = []
+    st.session_state['edu_key'] = []
 
-# --- 5. DASHBOARD MAIN ---
+# --- 4. DASHBOARD MAIN ---
 if df is not None:
-    # FILTERS
-    st.sidebar.header("Filters")
-    if st.sidebar.button("Reset Filters"): st.rerun()
-    
-    prov = st.sidebar.multiselect("Province", df["Province"].unique())
-    
-    # Filter Data
-    mask = pd.Series(True, index=df.index)
-    if prov: mask = mask & df["Province"].isin(prov)
-    
-    # SELECTOR
-    questions = [c for c in df.columns if c not in ["PCode", "District", "Province", "Region", "S4C6"]]
-    target = st.selectbox("Select Variable:", questions, index=0)
-    
-    # DATA PREP
-    main_data = df.loc[mask].copy()
-    main_data = main_data[~main_data[target].isin(["#NULL!", "nan", "None"])]
-    
-    if not main_data.empty:
-        # DROPDOWN FOR MAP
-        opts = sorted(main_data[target].unique())
-        map_choice = st.selectbox("Select Answer to Map:", opts)
+    # --- TABS ---
+    tab1, tab2 = st.tabs(["📑 Executive Summary", "🔍 Data Explorer (Full Dashboard)"])
+
+    # === TAB 1: SUMMARY ===
+    with tab1:
+        st.markdown("### 📌 Key Findings: Labour Force Survey 2024-25")
+        st.caption("Source: Official Key Insights Report")
         
-        # --- MAP LOGIC ---
-        st.subheader(f"District Map: {map_choice}")
-        
-        if pak_dist_json and "District" in main_data.columns:
-            # Group by District
-            d_stats = pd.crosstab(main_data["District"], main_data[target], normalize='index') * 100
-            
-            if map_choice in d_stats.columns:
-                map_df = d_stats[[map_choice]].reset_index()
-                map_df.columns = ["District", "Percent"]
-                
-                # USE DYNAMIC KEY FROM DEBUGGER
-                feature_key = st.session_state.get('geo_key', 'properties.shapeName')
-                
-                fig = px.choropleth_mapbox(
-                    map_df, geojson=pak_dist_json, locations="District",
-                    featureidkey=f"properties.{feature_key}", # Dynamic Key!
-                    color="Percent", color_continuous_scale="Spectral_r",
-                    mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
-                    opacity=0.7
-                )
-                fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=500)
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning(f"No data found for '{map_choice}' in any district.")
-        else:
-            st.warning("District column missing or GeoJSON not loaded.")
-            
-        # --- TABLES ---
+        st.link_button("📥 Download Full Questionnaire (PDF)", "https://www.pbs.gov.pk/wp-content/uploads/2020/07/Questionnaire-of-LFS-2024-25-Final.pdf")
         st.markdown("---")
+
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        kpi1.metric("Total Labour Force", "83.1 Million", "2024-25")
+        kpi2.metric("Employed", "77.2 Million", "92.9% of LF")
+        kpi3.metric("Unemployed", "~4.0 Million", "7.1% Rate")
+        kpi4.metric("Participation Rate", "44.7%", "National Avg")
+
+        st.markdown("---")
+        
         c1, c2 = st.columns(2)
         with c1:
-            st.caption("Detailed Breakdown")
-            st.dataframe(d_stats.style.format("{:.1f}%"), use_container_width=True)
+            st.subheader("Employment Ratio")
+            emp_data = pd.DataFrame({"Province": ["Punjab", "Sindh", "Balochistan", "KP"], "Ratio": [45.4, 42.3, 39.3, 37.2]})
+            fig = px.bar(emp_data, x="Province", y="Ratio", color="Province", text="Ratio")
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with c2:
+            st.subheader("Key Metrics")
+            pie_data = pd.DataFrame({"Metric": ["Employed", "Unemployed"], "Value": [92.9, 7.1]})
+            fig = px.pie(pie_data, names="Metric", values="Value", hole=0.5)
+            st.plotly_chart(fig, use_container_width=True)
+
+    # === TAB 2: EXPLORER ===
+    with tab2:
+        # FILTERS
+        st.sidebar.markdown("## 🔍 Filters")
+        if st.sidebar.button("🔄 Reset All Filters", on_click=reset_filters): st.rerun()
+        
+        prov = st.sidebar.multiselect("Province", df["Province"].unique(), key='prov_key')
+        
+        # MASK
+        mask = pd.Series(True, index=df.index)
+        if prov: mask = mask & df["Province"].isin(prov)
+        
+        # HEADER
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Filtered Database", f"{mask.sum():,.0f}")
+        c2.metric("Total Records", f"{len(df):,.0f}")
+        c3.metric("Selection Share", f"{(mask.sum()/len(df)*100):.1f}%")
+        st.markdown("---")
+
+        # SELECTOR
+        questions = [c for c in df.columns if c not in ["PCode", "District", "Province", "Region", "S4C6"]]
+        default_target = "Marital Status (S4C7)"
+        try:
+            def_idx = questions.index(default_target)
+        except:
+            def_idx = 0
+            
+        target = st.selectbox("Select Variable:", questions, index=def_idx)
+        
+        # DATA PREP
+        main_data = df.loc[mask].copy()
+        main_data[target] = main_data[target].astype(str)
+        main_data = main_data[~main_data[target].isin(["#NULL!", "nan", "None", "DK", "NR"])]
+        
+        # Check S4C81 cleanup again
+        if "S4C81" in target:
+             main_data[target] = main_data[target].replace({"1": "Yes", "2": "No", "Yes' 2'No": "Yes"})
+
+        if not main_data.empty:
+            opts = sorted(main_data[target].unique())
+            mode_val = main_data[target].mode()[0]
+            if mode_val not in opts: mode_val = opts[0]
+            
+            map_choice = st.selectbox("Select Answer to Map:", opts, index=opts.index(mode_val))
+            
+            # --- MAPS ---
+            m1, m2 = st.columns(2)
+            
+            # PROVINCE MAP
+            with m1:
+                st.subheader(f"Province: {map_choice}")
+                if pak_prov_json:
+                    p_stats = pd.crosstab(main_data["Province"], main_data[target], normalize='index') * 100
+                    if map_choice in p_stats.columns:
+                        p_map = p_stats[[map_choice]].reset_index()
+                        p_map.columns = ["Province", "Percent"]
+                        
+                        fig = px.choropleth_mapbox(
+                            p_map, geojson=pak_prov_json, locations="Province",
+                            featureidkey="properties.shapeName",
+                            color="Percent", color_continuous_scale="Spectral_r",
+                            mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
+                            opacity=0.7
+                        )
+                        fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=400)
+                        st.plotly_chart(fig, use_container_width=True)
+            
+            # DISTRICT MAP (FIXED!)
+            with m2:
+                st.subheader(f"District: {map_choice}")
+                if pak_dist_json and "District" in main_data.columns:
+                    d_stats = pd.crosstab(main_data["District"], main_data[target], normalize='index') * 100
+                    
+                    if map_choice in d_stats.columns:
+                        d_map = d_stats[[map_choice]].reset_index()
+                        d_map.columns = ["District", "Percent"]
+                        
+                        # DEBUG CHECK: Ensure names match GeoJSON upper case
+                        d_map["District"] = d_map["District"].astype(str).str.upper()
+
+                        fig = px.choropleth_mapbox(
+                            d_map, geojson=pak_dist_json, locations="District",
+                            featureidkey="properties.districts", # <--- THE CORRECT KEY
+                            color="Percent", color_continuous_scale="Spectral_r",
+                            mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
+                            opacity=0.7
+                        )
+                        fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=400)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.warning(f"No data for '{map_choice}'")
+                else:
+                    st.warning("District column missing or GeoJSON not loaded.")
+
+            # --- CHARTS ---
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**📊 Bar Chart**")
+                counts = main_data[target].value_counts().reset_index()
+                counts.columns = ["Answer", "Count"]
+                counts["%"] = (counts["Count"] / counts["Count"].sum() * 100)
+                fig = px.bar(counts, x="Answer", y="%", text=counts["%"].apply(lambda x: f"{x:.1f}%"))
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with c2:
+                st.markdown("**📋 Data Table**")
+                if "District" in main_data.columns:
+                    d_stats = pd.crosstab(main_data["District"], main_data[target], normalize='index') * 100
+                    if map_choice in d_stats.columns:
+                        st.dataframe(d_stats.sort_values(by=map_choice, ascending=False).style.format("{:.1f}%"), use_container_width=True)
 
 else:
     st.error(f"Data Load Failed: {status}")
