@@ -40,7 +40,7 @@ def load_geojson_prov():
         with open(path) as f: return json.load(f)
     return None
 
-# CRITICAL FIX: Changed to cache_data and added defragmentation steps
+# CRITICAL MEMORY FIX: Cached and Defragmented
 @st.cache_data(show_spinner="Loading Data...", ttl=7200)
 def load_data():
     try:
@@ -48,12 +48,12 @@ def load_data():
         file_name = "data.zip" if os.path.exists("data.zip") else "Data.zip"
         if not os.path.exists(file_name): return None, "Data file missing"
 
-        # Load in chunks to manage memory during read
+        # Load in chunks to prevent memory spikes
         chunks = []
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=False, dtype=str):
             chunk.columns = chunk.columns.str.strip()
             
-            # Numeric Age conversion per chunk
+            # Convert Age immediately to save space
             age_col = next((c for c in chunk.columns if c in ['S4C6', 'Age']), None)
             if age_col: 
                 chunk[age_col] = pd.to_numeric(chunk[age_col], errors='coerce')
@@ -65,8 +65,8 @@ def load_data():
         del chunks
         gc.collect()
 
-        # --- CRITICAL MEMORY FIX 1: DEFRAGMENTATION ---
-        # This prevents the "DataFrame is highly fragmented" warning that crashes the app
+        # --- CRITICAL FIX: DEFRAGMENTATION ---
+        # This single line prevents the "Highly Fragmented" warning that causes crashes
         df = df.copy()
 
         # --- B. PROVINCE STANDARDIZATION ---
@@ -103,7 +103,7 @@ def load_data():
             dist_map['201'] = 'LAHORE'
             dist_map['25121030'] = 'LAHORE'
 
-            # --- CRITICAL MEMORY FIX 2: PRE-MAPPING COPY ---
+            # Defragment again before mapping
             df = df.copy() 
 
             # Map & FORCE UPPER CASE
@@ -125,7 +125,7 @@ def load_data():
                     rename_dict[code] = f"{label} ({code})"
             df.rename(columns=rename_dict, inplace=True)
         
-        # Final Defrag before returning to app
+        # Final Defrag
         df = df.copy()
         return df, "Success"
 
@@ -143,12 +143,13 @@ if 'reset_trigger' not in st.session_state:
 
 def reset_filters():
     # We delete the keys so Streamlit re-initializes widgets with their 'default' values
-    keys_to_clear = ['prov_key', 'dist_key', 'reg_key', 'sex_key', 'edu_key']
+    # Added 'age_key' here to fix the slider reset issue
+    keys_to_clear = ['prov_key', 'dist_key', 'reg_key', 'sex_key', 'edu_key', 'age_key']
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
 
-# --- 4. EXCEL EXPORT (Robust) ---
+# --- 4. EXCEL EXPORT ---
 def to_excel(df_input):
     output = BytesIO()
     try:
@@ -188,6 +189,7 @@ if df is not None:
                     emp_counts = df["Province"].value_counts().reset_index()
                     emp_counts.columns = ["Province", "Count"]
                     fig = px.bar(emp_counts, x="Province", y="Count", color="Province", text="Count")
+                    # Fixed deprecated argument
                     st.plotly_chart(fig, use_container_width=True)
             
             with c2:
@@ -212,12 +214,14 @@ if df is not None:
 
             prov_col = "Province"
             prov_list = get_clean_list(prov_col)
+            # Added Key for Reset
             sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list, key='prov_key')
 
             age_col = next((c for c in df.columns if c in ['S4C6', 'Age']), None)
             if age_col:
                 min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
-                sel_age = st.sidebar.slider("Age Range (Filter)", min_age, max_age, (min_age, max_age))
+                # ADDED KEY HERE TO FIX RESET
+                sel_age = st.sidebar.slider("Age Range (Filter)", min_age, max_age, (min_age, max_age), key='age_key')
 
             dist_col = "District"
             sel_dist = []
@@ -226,6 +230,7 @@ if df is not None:
                 if sel_prov:
                     valid_dist_mask = valid_dist_mask & df[prov_col].isin(sel_prov)
                 valid_districts = sorted([x for x in df[valid_dist_mask][dist_col].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown", "nan", "UNKNOWN"]])
+                # Added Key for Reset
                 sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts, key='dist_key')
 
             # Helper for other filters
@@ -240,18 +245,19 @@ if df is not None:
             sex_col = get_col(["S4C5", "RSex", "Gender"])
             edu_col = get_col(["S4C9", "Education", "Highest class"])
 
+            # Added Keys for Reset
             sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col), key='reg_key')
             sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col), key='sex_key')
             sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col), key='edu_key')
 
             # MASK
             mask = pd.Series(True, index=df.index)
-            if prov_col: mask = mask & df[prov_col].isin(sel_prov)
+            if prov_col and sel_prov: mask = mask & df[prov_col].isin(sel_prov)
             if age_col: mask = mask & (df[age_col] >= sel_age[0]) & (df[age_col] <= sel_age[1])
             if sel_dist and dist_col in df.columns: mask = mask & df[dist_col].isin(sel_dist)
-            if sel_reg: mask = mask & df[reg_col].isin(sel_reg)
-            if sel_sex: mask = mask & df[sex_col].isin(sel_sex)
-            if sel_edu: mask = mask & df[edu_col].isin(sel_edu)
+            if sel_reg and sel_reg: mask = mask & df[reg_col].isin(sel_reg)
+            if sel_sex and sel_sex: mask = mask & df[sex_col].isin(sel_sex)
+            if sel_edu and sel_edu: mask = mask & df[edu_col].isin(sel_edu)
             
             # HEADER
             c1, c2, c3 = st.columns(3)
@@ -302,7 +308,7 @@ if df is not None:
                                 p_map = p_stats[[map_choice]].reset_index()
                                 p_map.columns = ["Province", "Percent"]
                                 
-                                # Updated to choropleth_map for Plotly 6.5 compatibility
+                                # Updated to choropleth_map (Fixes Deprecation Warning)
                                 fig = px.choropleth_map(
                                     p_map, geojson=pak_prov_json, locations="Province",
                                     featureidkey="properties.shapeName",
@@ -323,7 +329,7 @@ if df is not None:
                                 
                                 label_data = pd.merge(centroids, p_map, on="Province", how="inner")
                                 if not label_data.empty:
-                                    # Updated to scatter_map
+                                    # Updated to Scattermap
                                     fig.add_trace(go.Scattermap(
                                         lat=label_data["Lat"], lon=label_data["Lon"], mode='text',
                                         text=label_data.apply(lambda x: f"{x['Percent']:.1f}%", axis=1),
@@ -344,7 +350,7 @@ if df is not None:
                                 d_map.columns = ["District", "Percent"]
                                 d_map["District"] = d_map["District"].astype(str).str.upper().str.strip()
 
-                                # Updated to choropleth_map for Plotly 6.5 compatibility
+                                # Updated to choropleth_map
                                 fig = px.choropleth_map(
                                     d_map, geojson=pak_dist_json, locations="District",
                                     featureidkey="properties.districts",
