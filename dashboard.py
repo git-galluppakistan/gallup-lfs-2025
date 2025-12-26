@@ -41,7 +41,7 @@ st.markdown("""
 
 st.title("📊 Gallup Pakistan: Labour Force Survey 2024-25")
 
-# --- 2. MEMORY-OPTIMIZED DATA LOADERS ---
+# --- 2. OPTIMIZED DATA LOADER ---
 @st.cache_data(ttl=3600)
 def load_geojson_prov():
     path = "pakistan_provinces.geojson"
@@ -60,29 +60,61 @@ def load_geojson_dist():
 def load_data_optimized():
     df = None
     try:
-        # 1. LOAD MAIN DATA
+        # A. File Check
         file_name = "data.zip" if os.path.exists("data.zip") else "Data.zip"
-        if not os.path.exists(file_name): 
-            st.error("❌ 'data.zip' file missing from repository.")
+        if not os.path.exists(file_name):
+            st.error(f"File not found: {file_name}")
             return None
 
+        # B. Chunk Load Main Data
         chunks = []
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
-            chunk.columns = chunk.columns.str.strip()
             for col in chunk.columns:
                 chunk[col] = chunk[col].astype('category')
+            
             age_col = next((c for c in chunk.columns if c in ['S4C6', 'Age']), None)
-            if age_col: chunk[age_col] = pd.to_numeric(chunk[age_col], errors='coerce')
+            if age_col:
+                chunk[age_col] = pd.to_numeric(chunk[age_col], errors='coerce')
+
             chunks.append(chunk)
         
-        if not chunks: return None
         df = pd.concat(chunks, axis=0)
         del chunks
         gc.collect()
 
-        # --- PRE-PROCESSING ---
+        # --- C. THE DISTRICT INJECTOR (Restored from OLD SCRIPT logic) ---
+        # We load ALL mapping files but use the simple dtype=str logic from your old script
+        possible_files = [
+            "district_mapping.csv", 
+            "DSTT.xlsx - Sheet1.csv", 
+            "lahore-district-mapping-file.xlsx - Lahore.csv"
+        ]
         
-        # 2. Province Map
+        dfs_to_merge = []
+        for f in possible_files:
+            if os.path.exists(f):
+                # OLD SCRIPT LOGIC: Read as str, no complex cleaning
+                temp = pd.read_csv(f, dtype=str)
+                if "PCode" in temp.columns and "District" in temp.columns:
+                    dfs_to_merge.append(temp)
+        
+        if dfs_to_merge:
+            combined_map_df = pd.concat(dfs_to_merge, ignore_index=True)
+            # Create dictionary
+            district_lookup = combined_map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
+            
+            # Manual Fix for Lahore if files miss it
+            district_lookup['352'] = 'Lahore'
+            district_lookup['201'] = 'Lahore'
+
+            # Apply Mapping
+            if "PCode" in df.columns:
+                df["District"] = df["PCode"].astype(str).map(district_lookup)
+                df["District"] = df["District"].astype('category')
+            else:
+                st.warning("⚠️ PCode column missing. Cannot map Districts.")
+        
+        # D. Province Name Standardization
         province_map = {
             "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
             "BALOUCHISTAN": "Balochistan", "Balouchistan": "Balochistan",
@@ -96,52 +128,17 @@ def load_data_optimized():
             if "Province" in col:
                 df[col] = df[col].astype(str).map(province_map).fillna(df[col]).astype("category")
 
-        # 3. DISTRICT MAPPING
-        try:
-            possible_files = [
-                "district_mapping.csv", 
-                "DSTT.xlsx - Sheet1.csv", 
-                "lahore-district-mapping-file.xlsx - Lahore.csv"
-            ]
-            
-            dfs_to_merge = []
-            for f in possible_files:
-                if os.path.exists(f):
-                    # Read all as string to preserve PCode 0s
-                    temp = pd.read_csv(f, dtype=str)
-                    if "PCode" in temp.columns and "District" in temp.columns:
-                        dfs_to_merge.append(temp)
-            
-            if dfs_to_merge:
-                combined_map_df = pd.concat(dfs_to_merge, ignore_index=True)
-                dist_map = combined_map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
-                
-                # Manual Fallbacks
-                dist_map['352'] = 'Lahore'
-                dist_map['201'] = 'Lahore'
-                
-                if "PCode" in df.columns:
-                    # Map and then Normalize to Title Case (e.g. "LAHORE" -> "Lahore")
-                    df["District"] = df["PCode"].astype(str).map(dist_map)
-                    df["District"] = df["District"].astype(str).str.title().astype('category')
-                    
-        except Exception as e:
-            st.warning(f"⚠️ District mapping partial error: {e}")
-
-        # 4. Global Value Fixes (MOVED HERE so Dropdown sees it)
-        # Apply this to ALL potential Question columns
+        # E. Global Value Fixes (For Dropdowns)
         replacements = {
             "1": "Yes", "1.0": "Yes", "01": "Yes", "Yes' 2'No": "Yes",
             "2": "No",  "2.0": "No",  "02": "No"
         }
-        
-        # Explicitly fix known S4C columns
         target_cols = ['S4C81', 'S4C82'] 
         for c in target_cols:
             if c in df.columns:
                 df[c] = df[c].astype(str).str.strip().replace(replacements).astype("category")
 
-        # 5. Codebook Rename
+        # F. Codebook Rename
         if os.path.exists("code.csv"):
             codes = pd.read_csv("code.csv")
             rename_dict = {}
@@ -153,7 +150,7 @@ def load_data_optimized():
         return df
 
     except Exception as e:
-        st.error(f"🚨 CRITICAL DATA LOAD ERROR: {e}")
+        st.error(f"Error: {e}")
         return None
 
 df = load_data_optimized()
@@ -312,7 +309,7 @@ if df is not None:
                 main_data[target_q] = main_data[target_q].astype(str)
                 main_data = main_data[~main_data[target_q].isin(["#NULL!", "nan", "None", "DK", "NR"])]
                 
-                # Double check cleanup for dropdown options
+                # Ensure dropdown options are clean
                 if "S4C81" in target_q or "S4C82" in target_q:
                     main_data[target_q] = main_data[target_q].replace({
                         "1": "Yes", "1.0": "Yes", "01": "Yes", "Yes' 2'No": "Yes",
@@ -376,9 +373,6 @@ if df is not None:
                             if map_choice in dist_stats.columns:
                                 d_map_data = dist_stats[[map_choice]].reset_index()
                                 d_map_data.columns = ["District", "Percent"]
-                                
-                                # Title Case for Match
-                                d_map_data["District"] = d_map_data["District"].astype(str).str.title()
                                 
                                 fig_d_map = px.choropleth_mapbox(
                                     d_map_data, geojson=pak_dist_json, locations="District",
