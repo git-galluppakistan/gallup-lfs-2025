@@ -63,7 +63,7 @@ def load_data():
         del chunks
         gc.collect()
 
-        # --- B. PROVINCE STANDARDIZATION (OLD SCRIPT LOGIC) ---
+        # --- B. PROVINCE STANDARDIZATION ---
         province_map = {
             "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
             "BALOUCHISTAN": "Balochistan", "Balouchistan": "Balochistan",
@@ -124,16 +124,16 @@ df, status = load_data()
 pak_dist_json = load_geojson_dist()
 pak_prov_json = load_geojson_prov()
 
-# --- 3. SESSION STATE ---
+# --- 3. SESSION STATE & RESET LOGIC ---
 if 'reset_trigger' not in st.session_state:
     st.session_state['reset_trigger'] = False
 
 def reset_filters():
-    st.session_state['prov_key'] = []
-    st.session_state['dist_key'] = []
-    st.session_state['reg_key'] = []
-    st.session_state['sex_key'] = []
-    st.session_state['edu_key'] = []
+    # We delete the keys so Streamlit re-initializes widgets with their 'default' values
+    keys_to_clear = ['prov_key', 'dist_key', 'reg_key', 'sex_key', 'edu_key']
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
 
 # --- 4. EXCEL EXPORT (Robust) ---
 def to_excel(df_input):
@@ -142,7 +142,6 @@ def to_excel(df_input):
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df_input.to_excel(writer, index=True, sheet_name='Sheet1')
     except:
-        # Fallback to default engine if xlsxwriter fails/missing
         with pd.ExcelWriter(output) as writer:
             df_input.to_excel(writer, index=True, sheet_name='Sheet1')
     return output.getvalue()
@@ -200,6 +199,7 @@ if df is not None:
 
             prov_col = "Province"
             prov_list = get_clean_list(prov_col)
+            # KEY is crucial for reset
             sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list, key='prov_key')
 
             age_col = next((c for c in df.columns if c in ['S4C6', 'Age']), None)
@@ -214,6 +214,7 @@ if df is not None:
                 if sel_prov:
                     valid_dist_mask = valid_dist_mask & df[prov_col].isin(sel_prov)
                 valid_districts = sorted([x for x in df[valid_dist_mask][dist_col].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown", "nan", "UNKNOWN"]])
+                # KEY is crucial for reset
                 sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts, key='dist_key')
 
             # Helper for other filters
@@ -228,6 +229,7 @@ if df is not None:
             sex_col = get_col(["S4C5", "RSex", "Gender"])
             edu_col = get_col(["S4C9", "Education", "Highest class"])
 
+            # KEYS are crucial for reset
             sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col), key='reg_key')
             sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col), key='sex_key')
             sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col), key='edu_key')
@@ -256,12 +258,10 @@ if df is not None:
             except:
                 def_idx = 0
             
-            # REMOVED KEY to prevent state crash
             target = st.selectbox("Select Variable to Analyze:", questions, index=def_idx)
             
             # DATA PREP (Efficient)
             main_data = df.loc[mask].copy()
-            # Explicit GC
             gc.collect()
 
             main_data[target] = main_data[target].astype(str)
@@ -275,7 +275,6 @@ if df is not None:
                 if len(opts) > 0:
                     mode_val = main_data[target].mode()[0]
                     if mode_val not in opts: mode_val = opts[0]
-                    # REMOVED KEY to prevent state crash
                     map_choice = st.selectbox("Select Answer to Map:", opts, index=opts.index(mode_val))
                 else:
                     map_choice = None
@@ -386,7 +385,7 @@ if df is not None:
                     if map_choice in d_stats.columns:
                         final_table = d_stats.sort_values(by=map_choice, ascending=False)
                         
-                        # EXCEL BUTTON (Safe Wrapper)
+                        # EXCEL BUTTON
                         try:
                             excel_data = to_excel(final_table)
                             t_btn.download_button(
