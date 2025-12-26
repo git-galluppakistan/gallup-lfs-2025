@@ -7,10 +7,19 @@ import gc
 import json
 import numpy as np
 
-# --- 1. SETUP ---
+# --- 1. SETUP & SESSION STATE ---
 st.set_page_config(page_title="Gallup Pakistan Dashboard", layout="wide", page_icon="📊")
 
-# Modern CSS
+if 'reset_trigger' not in st.session_state:
+    st.session_state['reset_trigger'] = False
+
+def reset_filters():
+    st.session_state['prov_key'] = []
+    st.session_state['dist_key'] = []
+    st.session_state['reg_key'] = []
+    st.session_state['sex_key'] = []
+    st.session_state['edu_key'] = []
+
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-left: 1rem; padding-right: 1rem;}
@@ -33,44 +42,41 @@ st.markdown("""
 st.title("📊 Gallup Pakistan: Labour Force Survey 2024-25")
 
 # --- 2. MEMORY-OPTIMIZED DATA LOADERS ---
+@st.cache_data(ttl=3600)
+def load_geojson_prov():
+    path = "pakistan_provinces.geojson"
+    if os.path.exists(path):
+        with open(path) as f: return json.load(f)
+    return None
 
 @st.cache_data(ttl=3600)
-def load_geojson():
-    geojson_path = "pakistan_provinces.geojson"
-    if os.path.exists(geojson_path):
-        with open(geojson_path) as f:
-            return json.load(f)
+def load_geojson_dist():
+    path = "pakistan_districts.geojson" 
+    if os.path.exists(path):
+        with open(path) as f: return json.load(f)
     return None
 
 @st.cache_resource(show_spinner="Loading Heavy Dataset...", ttl="2h")
 def load_data_optimized():
     try:
         file_name = "data.zip" if os.path.exists("data.zip") else "Data.zip"
-        
-        if not os.path.exists(file_name):
-            return None
+        if not os.path.exists(file_name): return None
 
         chunks = []
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
             chunk.columns = chunk.columns.str.strip()
-            
             for col in chunk.columns:
                 chunk[col] = chunk[col].astype('category')
-            
             age_col = next((c for c in chunk.columns if c in ['S4C6', 'Age']), None)
-            if age_col:
-                chunk[age_col] = pd.to_numeric(chunk[age_col], errors='coerce')
+            if age_col: chunk[age_col] = pd.to_numeric(chunk[age_col], errors='coerce')
             chunks.append(chunk)
         
-        if not chunks:
-            return None
-
+        if not chunks: return None
         df = pd.concat(chunks, axis=0)
         del chunks
         gc.collect()
 
         # --- PRE-PROCESSING ---
-        
         # 1. Province Map
         province_map = {
             "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
@@ -85,26 +91,39 @@ def load_data_optimized():
             if "Province" in col:
                 df[col] = df[col].astype(str).map(province_map).fillna(df[col]).astype("category")
 
-        # 2. District Map
-        map_files = ["district_mapping.csv", "DSTT.xlsx - Sheet1.csv"]
-        map_df = None
-        for f in map_files:
-            if os.path.exists(f):
-                map_df = pd.read_csv(f, dtype=str)
-                break
+        # 2. District Mapping (UPDATED: Loads MULTIPLE files now)
+        # We now check ALL these files and combine them. This fixes Lahore automatically.
+        possible_files = [
+            "district_mapping.csv", 
+            "DSTT.xlsx - Sheet1.csv", 
+            "lahore-district-mapping-file.xlsx - Lahore.csv" # <--- Your new file
+        ]
         
-        if map_df is not None and "PCode" in map_df.columns and "District" in map_df.columns:
-            dist_map = map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
+        dfs_to_merge = []
+        for f in possible_files:
+            if os.path.exists(f):
+                try:
+                    # Read all mapping files found
+                    temp_df = pd.read_csv(f, dtype=str)
+                    if "PCode" in temp_df.columns and "District" in temp_df.columns:
+                        dfs_to_merge.append(temp_df)
+                except:
+                    pass
+        
+        if dfs_to_merge:
+            # Combine all mapping files into one big map
+            combined_map_df = pd.concat(dfs_to_merge, ignore_index=True)
+            dist_map = combined_map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
+            
             if "PCode" in df.columns:
                 df["District"] = df["PCode"].astype(str).map(dist_map).astype('category')
 
-        # 3. Global Value Fixes (CRITICAL FIX FOR S4C81)
+        # 3. Global Value Fixes
         target_cols = ['S4C81', 'S4C82'] 
         for c in target_cols:
             if c in df.columns:
                 df[c] = df[c].astype(str).str.strip().replace({
-                    "1": "Yes", "1.0": "Yes", "01": "Yes",
-                    "Yes' 2'No": "Yes",  # <--- FIXED CORRUPTED DATA HERE
+                    "1": "Yes", "1.0": "Yes", "01": "Yes", "Yes' 2'No": "Yes",
                     "2": "No",  "2.0": "No",  "02": "No"
                 }).astype("category")
 
@@ -124,7 +143,8 @@ def load_data_optimized():
         return None
 
 df = load_data_optimized()
-pak_geojson = load_geojson()
+pak_prov_json = load_geojson_prov()
+pak_dist_json = load_geojson_dist()
 gc.collect()
 
 # --- 3. DASHBOARD TABS ---
@@ -138,6 +158,13 @@ try:
         st.markdown("### 📌 Key Findings: Labour Force Survey 2024-25")
         st.caption("Source: Official Key Insights Report")
         
+        st.link_button(
+            "📥 Download Full Questionnaire (PDF)", 
+            "https://www.pbs.gov.pk/wp-content/uploads/2020/07/Questionnaire-of-LFS-2024-25-Final.pdf",
+            help="Click to open the official PBS Questionnaire PDF"
+        )
+        st.markdown("---")
+
         kpi1, kpi2, kpi3, kpi4 = st.columns(4)
         kpi1.metric("Total Labour Force", "83.1 Million", "2024-25")
         kpi2.metric("Employed", "77.2 Million", "92.9% of LF")
@@ -205,13 +232,17 @@ try:
             
             # --- FILTERS ---
             st.sidebar.markdown("## 🔍 Data Explorer Filters")
+            
+            if st.sidebar.button("🔄 Reset All Filters", on_click=reset_filters):
+                st.rerun()
+
             def get_clean_list(column):
                 if column and column in df.columns:
                     return sorted([x for x in df[column].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown"]])
                 return []
 
             prov_list = get_clean_list(prov_col)
-            sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list)
+            sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list, key='prov_key')
 
             if age_col:
                 min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
@@ -226,11 +257,11 @@ try:
                     x for x in df[valid_dist_mask][dist_col].unique().tolist() 
                     if str(x) not in ["#NULL!", "nan", "None", "", "Unknown"]
                 ])
-                sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts)
+                sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts, key='dist_key')
 
-            sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col))
-            sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col))
-            sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col))
+            sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col), key='reg_key')
+            sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col), key='sex_key')
+            sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col), key='edu_key')
             
             # --- APPLY FILTERS ---
             mask = pd.Series(True, index=df.index)
@@ -252,69 +283,80 @@ try:
             # --- QUESTION SELECTOR ---
             ignore = [prov_col, reg_col, sex_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode", "District"]
             questions = [c for c in df.columns if c not in ignore]
-            default_target = "Marital Status (S4C7)"
+            default_target = "Marital status (S4C7)"
             target_q = st.selectbox("Select Variable to Analyze:", questions, 
                                   index=questions.index(default_target) if default_target in questions else 0)
 
             if target_q:
-                # HEADER FOR QUESTION (Outside charts)
                 st.markdown(f"### 🧐 Analysis of: {target_q}")
                 st.markdown("---")
 
-                cols_to_load = [target_q] + [c for c in [prov_col, sex_col, reg_col, age_col, edu_col] if c]
+                cols_to_load = [target_q] + [c for c in [prov_col, sex_col, reg_col, age_col, edu_col, dist_col] if c]
                 main_data = df.loc[mask, cols_to_load]
                 main_data[target_q] = main_data[target_q].astype(str)
                 main_data = main_data[~main_data[target_q].isin(["#NULL!", "nan", "None", "DK", "NR"])]
                 
-                # --- SAFETY PATCH (Second Layer for Yes/No) ---
                 if "S4C81" in target_q or "S4C82" in target_q:
                     main_data[target_q] = main_data[target_q].astype(str).replace({
-                        "1": "Yes", "1.0": "Yes", "01": "Yes",
-                        "Yes' 2'No": "Yes", # <--- EXTRA SAFETY
+                        "1": "Yes", "1.0": "Yes", "01": "Yes", "Yes' 2'No": "Yes",
                         "2": "No",  "2.0": "No",  "02": "No"
                     })
 
                 if not main_data.empty:
-                    top_ans = main_data[target_q].mode()[0]
+                    unique_options = sorted(main_data[target_q].unique())
+                    default_opt = main_data[target_q].mode()[0]
+                    map_choice = st.selectbox("Select Answer to Map:", unique_options, index=unique_options.index(default_opt) if default_opt in unique_options else 0)
                     
-                    # 1. MAP
-                    st.subheader(f"🗺️ Province Heatmap: {top_ans}")
-                    if pak_geojson and prov_col:
-                        prov_stats = pd.crosstab(main_data[prov_col], main_data[target_q], normalize='index') * 100
-                        if top_ans in prov_stats.columns:
-                            map_data = prov_stats[[top_ans]].reset_index()
-                            map_data.columns = ["Province", "Percent"]
-                            
-                            fig_map = px.choropleth_mapbox(
-                                map_data, geojson=pak_geojson, locations="Province",
-                                featureidkey="properties.shapeName",
-                                color="Percent", color_continuous_scale="Spectral_r",
-                                mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
-                                opacity=0.7
-                            )
-                            # Add Labels
-                            centroids = pd.DataFrame([
-                                {"Province": "Punjab", "Lat": 30.8, "Lon": 72.5},
-                                {"Province": "Sindh", "Lat": 26.0, "Lon": 68.5},
-                                {"Province": "Balochistan", "Lat": 28.5, "Lon": 65.5},
-                                {"Province": "Khyber Pakhtunkhwa", "Lat": 34.5, "Lon": 72.0},
-                                {"Province": "Gilgit-Baltistan", "Lat": 35.8, "Lon": 74.5},
-                                {"Province": "Azad Jammu & Kashmir", "Lat": 34.0, "Lon": 73.8},
-                                {"Province": "Islamabad Capital Territory", "Lat": 33.7, "Lon": 73.1}
-                            ])
-                            label_data = pd.merge(centroids, map_data, on="Province", how="inner")
-                            if not label_data.empty:
-                                fig_map.add_trace(go.Scattermapbox(
-                                    lat=label_data["Lat"], lon=label_data["Lon"], mode='text',
-                                    text=label_data.apply(lambda x: f"{x['Percent']:.1f}%", axis=1),
-                                    textfont=dict(size=14, color='black'), showlegend=False, hoverinfo='none'
-                                ))
-                            fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=500)
-                            st.plotly_chart(fig_map, use_container_width=True)
-                    else:
-                         st.warning("⚠️ Map file missing.")
+                    # --- SIDE-BY-SIDE MAPS ---
+                    map_col1, map_col2 = st.columns(2)
+                    
+                    # 1. PROVINCE MAP
+                    with map_col1:
+                        st.subheader(f"Province: {map_choice}")
+                        if pak_prov_json and prov_col:
+                            prov_stats = pd.crosstab(main_data[prov_col], main_data[target_q], normalize='index') * 100
+                            if map_choice in prov_stats.columns:
+                                map_data = prov_stats[[map_choice]].reset_index()
+                                map_data.columns = ["Province", "Percent"]
+                                
+                                fig_map = px.choropleth_mapbox(
+                                    map_data, geojson=pak_prov_json, locations="Province",
+                                    featureidkey="properties.shapeName",
+                                    color="Percent", color_continuous_scale="Spectral_r",
+                                    mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
+                                    opacity=0.7
+                                )
+                                fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=400)
+                                st.plotly_chart(fig_map, use_container_width=True)
+                            else:
+                                st.info("No data for this option.")
+                        else:
+                            st.warning("⚠️ Province Map Missing")
 
-                    # 2. CHARTS ROW 1
+                    # 2. DISTRICT MAP
+                    with map_col2:
+                        st.subheader(f"District: {map_choice}")
+                        if pak_dist_json and dist_col in main_data.columns:
+                            dist_stats = pd.crosstab(main_data[dist_col], main_data[target_q], normalize='index') * 100
+                            if map_choice in dist_stats.columns:
+                                d_map_data = dist_stats[[map_choice]].reset_index()
+                                d_map_data.columns = ["District", "Percent"]
+                                
+                                fig_d_map = px.choropleth_mapbox(
+                                    d_map_data, geojson=pak_dist_json, locations="District",
+                                    featureidkey="properties.shapeName", 
+                                    color="Percent", color_continuous_scale="Spectral_r",
+                                    mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
+                                    opacity=0.7
+                                )
+                                fig_d_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=400)
+                                st.plotly_chart(fig_d_map, use_container_width=True)
+                            else:
+                                st.info("No data for this option.")
+                        else:
+                             st.warning("⚠️ Please upload 'pakistan_districts.geojson'")
+
+                    # 3. CHARTS ROW 1
                     col1, col2, col3 = st.columns([1.5, 1, 1])
 
                     with col1:
@@ -325,7 +367,6 @@ try:
                         fig_bar = px.bar(counts, x="Answer", y="%", color="Answer", 
                                         text=counts["%"].apply(lambda x: f"{x:.1f}%"),
                                         color_discrete_sequence=px.colors.qualitative.Bold)
-                        # No title inside
                         fig_bar.update_layout(showlegend=False, title_text="")
                         st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -336,7 +377,6 @@ try:
                             prov_totals = prov_grp.groupby(prov_col, observed=True)['Count'].transform('sum')
                             prov_grp['%'] = (prov_grp['Count'] / prov_totals * 100).fillna(0)
                             fig_prov = px.bar(prov_grp, x=prov_col, y="%", color=target_q, barmode="stack")
-                            # LEGEND ON, TITLE OFF
                             fig_prov.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.2), yaxis_title="%", title_text="")
                             st.plotly_chart(fig_prov, use_container_width=True)
 
@@ -346,11 +386,10 @@ try:
                             g_counts = main_data[sex_col].value_counts().reset_index()
                             g_counts.columns = ["Gender", "Count"]
                             fig_pie = px.pie(g_counts, names="Gender", values="Count", hole=0.5)
-                            # LEGEND ON, TITLE OFF
                             fig_pie.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.1), title_text="")
                             st.plotly_chart(fig_pie, use_container_width=True)
 
-                    # 3. CHARTS ROW 2
+                    # 4. CHARTS ROW 2
                     col4, col5 = st.columns([1, 1.5])
 
                     with col4:
@@ -382,11 +421,10 @@ try:
                             fig_age = px.area(age_grp, x="AgeGrp", y="%", color=target_q, markers=True,
                                             category_orders={"AgeGrp": labels}) 
                             fig_age.update_xaxes(type='category') 
-                            # NO TITLE to prevent shrinking
                             fig_age.update_layout(title_text="", showlegend=True, legend=dict(orientation="h", y=-0.2))
                             st.plotly_chart(fig_age, use_container_width=True)
 
-                    # 4. TABLES
+                    # 5. TABLES
                     st.markdown("---")
                     st.subheader("📋 Detailed Data View")
                     t1, t2 = st.columns(2)
@@ -396,11 +434,12 @@ try:
                         st.dataframe(counts, use_container_width=True, hide_index=True)
                         
                     with t2:
-                        st.caption(f"Province Breakdown (Top % {top_ans})")
+                        st.caption(f"Province Breakdown (Showing % for: {map_choice})")
                         if prov_col:
                             prov_pivot = pd.crosstab(main_data[prov_col], main_data[target_q], normalize='index') * 100
                             if not prov_pivot.empty:
-                                prov_pivot = prov_pivot.sort_values(by=top_ans, ascending=False)
+                                if map_choice in prov_pivot.columns:
+                                    prov_pivot = prov_pivot.sort_values(by=map_choice, ascending=False)
                                 st.dataframe(prov_pivot.style.format("{:.1f}%"), use_container_width=True)
 
         else:
@@ -408,4 +447,3 @@ try:
 
 except Exception as e:
     st.error(f"🚨 Critical Dashboard Error: {e}")
-
