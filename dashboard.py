@@ -66,8 +66,14 @@ def load_data():
         gc.collect()
 
         # --- CRITICAL FIX: DEFRAGMENTATION ---
-        # This single line prevents the "Highly Fragmented" warning that causes crashes
         df = df.copy()
+
+        # --- SMART COLUMN FIX: Find & Normalize Province ---
+        # If "Province" isn't found exactly, look for it and rename it
+        if "Province" not in df.columns:
+            candidate = next((c for c in df.columns if "Province" in c or "province" in c), None)
+            if candidate:
+                df.rename(columns={candidate: "Province"}, inplace=True)
 
         # --- B. PROVINCE STANDARDIZATION ---
         province_map = {
@@ -80,10 +86,8 @@ def load_data():
             "GB": "Gilgit-Baltistan", "Gilgit Baltistan": "Gilgit-Baltistan"
         }
         
-        # Apply map only to relevant columns
-        for col in df.columns:
-            if "Province" in col:
-                df[col] = df[col].map(province_map).fillna(df[col]).astype("category")
+        if "Province" in df.columns:
+            df["Province"] = df["Province"].map(province_map).fillna(df["Province"]).astype("category")
 
         # --- C. DISTRICT MAPPING ---
         possible_files = ["district_mapping.csv", "DSTT.xlsx - Sheet1.csv", "lahore-district-mapping-file.xlsx - Lahore.csv"]
@@ -143,7 +147,6 @@ if 'reset_trigger' not in st.session_state:
 
 def reset_filters():
     # We delete the keys so Streamlit re-initializes widgets with their 'default' values
-    # Added 'age_key' here to fix the slider reset issue
     keys_to_clear = ['prov_key', 'dist_key', 'reg_key', 'sex_key', 'edu_key', 'age_key']
     for key in keys_to_clear:
         if key in st.session_state:
@@ -185,12 +188,14 @@ if df is not None:
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader("Employment Ratio")
+                # Updated Logic: Check if Province exists, otherwise show warning
                 if "Province" in df.columns:
                     emp_counts = df["Province"].value_counts().reset_index()
                     emp_counts.columns = ["Province", "Count"]
                     fig = px.bar(emp_counts, x="Province", y="Count", color="Province", text="Count")
-                    # Fixed deprecated argument
                     st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("⚠️ Province column not found. The chart cannot be displayed.")
             
             with c2:
                 st.subheader("Key Metrics")
@@ -214,13 +219,11 @@ if df is not None:
 
             prov_col = "Province"
             prov_list = get_clean_list(prov_col)
-            # Added Key for Reset
             sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list, key='prov_key')
 
             age_col = next((c for c in df.columns if c in ['S4C6', 'Age']), None)
             if age_col:
                 min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
-                # ADDED KEY HERE TO FIX RESET
                 sel_age = st.sidebar.slider("Age Range (Filter)", min_age, max_age, (min_age, max_age), key='age_key')
 
             dist_col = "District"
@@ -230,7 +233,6 @@ if df is not None:
                 if sel_prov:
                     valid_dist_mask = valid_dist_mask & df[prov_col].isin(sel_prov)
                 valid_districts = sorted([x for x in df[valid_dist_mask][dist_col].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown", "nan", "UNKNOWN"]])
-                # Added Key for Reset
                 sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts, key='dist_key')
 
             # Helper for other filters
@@ -245,7 +247,6 @@ if df is not None:
             sex_col = get_col(["S4C5", "RSex", "Gender"])
             edu_col = get_col(["S4C9", "Education", "Highest class"])
 
-            # Added Keys for Reset
             sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col), key='reg_key')
             sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col), key='sex_key')
             sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col), key='edu_key')
@@ -308,7 +309,7 @@ if df is not None:
                                 p_map = p_stats[[map_choice]].reset_index()
                                 p_map.columns = ["Province", "Percent"]
                                 
-                                # Updated to choropleth_map (Fixes Deprecation Warning)
+                                # Updated to choropleth_map (Plotly 6.5)
                                 fig = px.choropleth_map(
                                     p_map, geojson=pak_prov_json, locations="Province",
                                     featureidkey="properties.shapeName",
