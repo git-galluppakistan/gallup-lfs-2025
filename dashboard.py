@@ -40,28 +40,34 @@ def load_geojson_prov():
         with open(path) as f: return json.load(f)
     return None
 
-@st.cache_resource(show_spinner="Loading Data...", ttl="2h")
+# CRITICAL FIX: Changed to cache_data and added defragmentation steps
+@st.cache_data(show_spinner="Loading Data...", ttl=7200)
 def load_data():
     try:
         # A. Load Main Data
         file_name = "data.zip" if os.path.exists("data.zip") else "Data.zip"
         if not os.path.exists(file_name): return None, "Data file missing"
 
+        # Load in chunks to manage memory during read
         chunks = []
-        for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
+        for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=False, dtype=str):
             chunk.columns = chunk.columns.str.strip()
-            for col in chunk.columns:
-                chunk[col] = chunk[col].astype('category')
             
-            # Numeric Age
+            # Numeric Age conversion per chunk
             age_col = next((c for c in chunk.columns if c in ['S4C6', 'Age']), None)
-            if age_col: chunk[age_col] = pd.to_numeric(chunk[age_col], errors='coerce')
-
+            if age_col: 
+                chunk[age_col] = pd.to_numeric(chunk[age_col], errors='coerce')
+            
             chunks.append(chunk)
         
+        # Combine chunks
         df = pd.concat(chunks, axis=0)
         del chunks
         gc.collect()
+
+        # --- CRITICAL MEMORY FIX 1: DEFRAGMENTATION ---
+        # This prevents the "DataFrame is highly fragmented" warning that crashes the app
+        df = df.copy()
 
         # --- B. PROVINCE STANDARDIZATION ---
         province_map = {
@@ -73,9 +79,11 @@ def load_data():
             "AJK": "Azad Jammu & Kashmir", "Azad Kashmir": "Azad Jammu & Kashmir",
             "GB": "Gilgit-Baltistan", "Gilgit Baltistan": "Gilgit-Baltistan"
         }
+        
+        # Apply map only to relevant columns
         for col in df.columns:
             if "Province" in col:
-                df[col] = df[col].astype(str).map(province_map).fillna(df[col]).astype("category")
+                df[col] = df[col].map(province_map).fillna(df[col]).astype("category")
 
         # --- C. DISTRICT MAPPING ---
         possible_files = ["district_mapping.csv", "DSTT.xlsx - Sheet1.csv", "lahore-district-mapping-file.xlsx - Lahore.csv"]
@@ -95,6 +103,9 @@ def load_data():
             dist_map['201'] = 'LAHORE'
             dist_map['25121030'] = 'LAHORE'
 
+            # --- CRITICAL MEMORY FIX 2: PRE-MAPPING COPY ---
+            df = df.copy() 
+
             # Map & FORCE UPPER CASE
             df["District"] = df["PCode"].astype(str).map(dist_map)
             df["District"] = df["District"].fillna("Unknown")
@@ -113,7 +124,9 @@ def load_data():
                 if code not in ['Province', 'Region', 'RSex', 'S4C5', 'S4C9', 'S4C6', 'District']:
                     rename_dict[code] = f"{label} ({code})"
             df.rename(columns=rename_dict, inplace=True)
-
+        
+        # Final Defrag before returning to app
+        df = df.copy()
         return df, "Success"
 
     except Exception as e:
@@ -199,7 +212,6 @@ if df is not None:
 
             prov_col = "Province"
             prov_list = get_clean_list(prov_col)
-            # KEY is crucial for reset
             sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list, key='prov_key')
 
             age_col = next((c for c in df.columns if c in ['S4C6', 'Age']), None)
@@ -214,7 +226,6 @@ if df is not None:
                 if sel_prov:
                     valid_dist_mask = valid_dist_mask & df[prov_col].isin(sel_prov)
                 valid_districts = sorted([x for x in df[valid_dist_mask][dist_col].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown", "nan", "UNKNOWN"]])
-                # KEY is crucial for reset
                 sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts, key='dist_key')
 
             # Helper for other filters
@@ -229,7 +240,6 @@ if df is not None:
             sex_col = get_col(["S4C5", "RSex", "Gender"])
             edu_col = get_col(["S4C9", "Education", "Highest class"])
 
-            # KEYS are crucial for reset
             sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col), key='reg_key')
             sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col), key='sex_key')
             sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col), key='edu_key')
@@ -292,11 +302,12 @@ if df is not None:
                                 p_map = p_stats[[map_choice]].reset_index()
                                 p_map.columns = ["Province", "Percent"]
                                 
-                                fig = px.choropleth_mapbox(
+                                # Updated to choropleth_map for Plotly 6.5 compatibility
+                                fig = px.choropleth_map(
                                     p_map, geojson=pak_prov_json, locations="Province",
                                     featureidkey="properties.shapeName",
                                     color="Percent", color_continuous_scale="Spectral_r",
-                                    mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
+                                    map_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
                                     opacity=0.7
                                 )
                                 # LABELS
@@ -312,7 +323,8 @@ if df is not None:
                                 
                                 label_data = pd.merge(centroids, p_map, on="Province", how="inner")
                                 if not label_data.empty:
-                                    fig.add_trace(go.Scattermapbox(
+                                    # Updated to scatter_map
+                                    fig.add_trace(go.Scattermap(
                                         lat=label_data["Lat"], lon=label_data["Lon"], mode='text',
                                         text=label_data.apply(lambda x: f"{x['Percent']:.1f}%", axis=1),
                                         textfont=dict(size=14, color='black'), showlegend=False, hoverinfo='none'
@@ -332,11 +344,12 @@ if df is not None:
                                 d_map.columns = ["District", "Percent"]
                                 d_map["District"] = d_map["District"].astype(str).str.upper().str.strip()
 
-                                fig = px.choropleth_mapbox(
+                                # Updated to choropleth_map for Plotly 6.5 compatibility
+                                fig = px.choropleth_map(
                                     d_map, geojson=pak_dist_json, locations="District",
                                     featureidkey="properties.districts",
                                     color="Percent", color_continuous_scale="Spectral_r",
-                                    mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
+                                    map_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
                                     opacity=0.7
                                 )
                                 fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=400)
