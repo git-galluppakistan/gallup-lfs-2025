@@ -82,7 +82,7 @@ def load_data_optimized():
 
         # --- PRE-PROCESSING ---
         
-        # 2. Province Map (Standard)
+        # 2. Province Map
         province_map = {
             "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
             "BALOUCHISTAN": "Balochistan", "Balouchistan": "Balochistan",
@@ -96,18 +96,18 @@ def load_data_optimized():
             if "Province" in col:
                 df[col] = df[col].astype(str).map(province_map).fillna(df[col]).astype("category")
 
-        # 3. DISTRICT MAPPING (SAFE MODE)
-        # We wrap this in a separate try/except so if mapping fails, the Dashboard STILL LOADS.
+        # 3. DISTRICT MAPPING
         try:
             possible_files = [
                 "district_mapping.csv", 
                 "DSTT.xlsx - Sheet1.csv", 
-                "lahore-district-mapping-file.xlsx - Lahore.csv" # Ensure this matches GitHub EXACTLY
+                "lahore-district-mapping-file.xlsx - Lahore.csv"
             ]
             
             dfs_to_merge = []
             for f in possible_files:
                 if os.path.exists(f):
+                    # Read all as string to preserve PCode 0s
                     temp = pd.read_csv(f, dtype=str)
                     if "PCode" in temp.columns and "District" in temp.columns:
                         dfs_to_merge.append(temp)
@@ -116,25 +116,30 @@ def load_data_optimized():
                 combined_map_df = pd.concat(dfs_to_merge, ignore_index=True)
                 dist_map = combined_map_df.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
                 
-                # Manual Fallback for Lahore if files miss it
+                # Manual Fallbacks
                 dist_map['352'] = 'Lahore'
                 dist_map['201'] = 'Lahore'
                 
                 if "PCode" in df.columns:
-                    df["District"] = df["PCode"].astype(str).map(dist_map).astype('category')
+                    # Map and then Normalize to Title Case (e.g. "LAHORE" -> "Lahore")
+                    df["District"] = df["PCode"].astype(str).map(dist_map)
+                    df["District"] = df["District"].astype(str).str.title().astype('category')
                     
         except Exception as e:
-            # If mapping fails, just print a warning but KEEP GOING
-            st.warning(f"⚠️ District mapping failed partially (Dashboard still running): {e}")
+            st.warning(f"⚠️ District mapping partial error: {e}")
 
-        # 4. Global Value Fixes
+        # 4. Global Value Fixes (MOVED HERE so Dropdown sees it)
+        # Apply this to ALL potential Question columns
+        replacements = {
+            "1": "Yes", "1.0": "Yes", "01": "Yes", "Yes' 2'No": "Yes",
+            "2": "No",  "2.0": "No",  "02": "No"
+        }
+        
+        # Explicitly fix known S4C columns
         target_cols = ['S4C81', 'S4C82'] 
         for c in target_cols:
             if c in df.columns:
-                df[c] = df[c].astype(str).str.strip().replace({
-                    "1": "Yes", "1.0": "Yes", "01": "Yes", "Yes' 2'No": "Yes",
-                    "2": "No",  "2.0": "No",  "02": "No"
-                }).astype("category")
+                df[c] = df[c].astype(str).str.strip().replace(replacements).astype("category")
 
         # 5. Codebook Rename
         if os.path.exists("code.csv"):
@@ -162,7 +167,7 @@ if df is not None:
         tab1, tab2 = st.tabs(["📑 Executive Summary", "🔍 Data Explorer (Full Dashboard)"])
 
         # ==============================================================================
-        # TAB 1: EXECUTIVE SUMMARY
+        # TAB 1
         # ==============================================================================
         with tab1:
             st.markdown("### 📌 Key Findings: Labour Force Survey 2024-25")
@@ -221,10 +226,9 @@ if df is not None:
             st.info("**Key Insight:** Manufacturing is the 2nd largest employer (25.4%), followed by Wholesale & Retail Trade (16.0%).")
 
         # ==============================================================================
-        # TAB 2: DATA EXPLORER
+        # TAB 2
         # ==============================================================================
         with tab2:
-            # --- HELPER FUNCTIONS ---
             def get_col(candidates):
                 for c in candidates:
                     for col in df.columns:
@@ -239,9 +243,8 @@ if df is not None:
             age_col = get_col(["S4C6", "Age"])
             dist_col = "District"
             
-            # --- FILTERS ---
+            # FILTERS
             st.sidebar.markdown("## 🔍 Data Explorer Filters")
-            
             if st.sidebar.button("🔄 Reset All Filters", on_click=reset_filters):
                 st.rerun()
 
@@ -264,7 +267,7 @@ if df is not None:
                     valid_dist_mask = valid_dist_mask & df[prov_col].isin(sel_prov)
                 valid_districts = sorted([
                     x for x in df[valid_dist_mask][dist_col].unique().tolist() 
-                    if str(x) not in ["#NULL!", "nan", "None", "", "Unknown"]
+                    if str(x) not in ["#NULL!", "nan", "None", "", "Unknown", "nan"]
                 ])
                 sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts, key='dist_key')
 
@@ -272,7 +275,7 @@ if df is not None:
             sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col), key='sex_key')
             sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col), key='edu_key')
             
-            # --- APPLY FILTERS ---
+            # APPLY MASK
             mask = pd.Series(True, index=df.index)
             if prov_col: mask = mask & df[prov_col].isin(sel_prov)
             if age_col: mask = mask & (df[age_col] >= sel_age[0]) & (df[age_col] <= sel_age[1])
@@ -281,18 +284,20 @@ if df is not None:
             if sel_sex: mask = mask & df[sex_col].isin(sel_sex)
             if sel_edu: mask = mask & df[edu_col].isin(sel_edu)
             
-            # --- HEADER ---
+            # HEADER
             c1, c2, c3 = st.columns(3)
             c1.metric("Filtered Database", f"{mask.sum():,.0f}")
             c2.metric("Total Records", f"{len(df):,.0f}")
             c3.metric("Selection Share", f"{(mask.sum()/len(df)*100):.1f}%")
-            
             st.markdown("---")
             
-            # --- QUESTION SELECTOR ---
+            # QUESTION SELECTOR
             ignore = [prov_col, reg_col, sex_col, edu_col, age_col, "Mouza", "Locality", "PCode", "EBCode", "District"]
             questions = [c for c in df.columns if c not in ignore]
+            
+            # Fixed Default
             default_target = "Marital Status (S4C7)"
+            
             target_q = st.selectbox("Select Variable to Analyze:", questions, 
                                   index=questions.index(default_target) if default_target in questions else 0)
 
@@ -302,11 +307,14 @@ if df is not None:
 
                 cols_to_load = [target_q] + [c for c in [prov_col, sex_col, reg_col, age_col, edu_col, dist_col] if c]
                 main_data = df.loc[mask, cols_to_load]
+                
+                # Cleanup data for display
                 main_data[target_q] = main_data[target_q].astype(str)
                 main_data = main_data[~main_data[target_q].isin(["#NULL!", "nan", "None", "DK", "NR"])]
                 
+                # Double check cleanup for dropdown options
                 if "S4C81" in target_q or "S4C82" in target_q:
-                    main_data[target_q] = main_data[target_q].astype(str).replace({
+                    main_data[target_q] = main_data[target_q].replace({
                         "1": "Yes", "1.0": "Yes", "01": "Yes", "Yes' 2'No": "Yes",
                         "2": "No",  "2.0": "No",  "02": "No"
                     })
@@ -335,10 +343,28 @@ if df is not None:
                                     mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
                                     opacity=0.7
                                 )
+                                # Force Labels
+                                centroids = pd.DataFrame([
+                                    {"Province": "Punjab", "Lat": 30.8, "Lon": 72.5},
+                                    {"Province": "Sindh", "Lat": 26.0, "Lon": 68.5},
+                                    {"Province": "Balochistan", "Lat": 28.5, "Lon": 65.5},
+                                    {"Province": "Khyber Pakhtunkhwa", "Lat": 34.5, "Lon": 72.0},
+                                    {"Province": "Gilgit-Baltistan", "Lat": 35.8, "Lon": 74.5},
+                                    {"Province": "Azad Jammu & Kashmir", "Lat": 34.0, "Lon": 73.8},
+                                    {"Province": "Islamabad Capital Territory", "Lat": 33.7, "Lon": 73.1}
+                                ])
+                                label_data = pd.merge(centroids, map_data, on="Province", how="inner")
+                                if not label_data.empty:
+                                    fig_map.add_trace(go.Scattermapbox(
+                                        lat=label_data["Lat"], lon=label_data["Lon"], mode='text',
+                                        text=label_data.apply(lambda x: f"{x['Percent']:.1f}%", axis=1),
+                                        textfont=dict(size=14, color='black'), showlegend=False, hoverinfo='none'
+                                    ))
+                                
                                 fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=400)
                                 st.plotly_chart(fig_map, use_container_width=True)
                             else:
-                                st.info("No data for this option.")
+                                st.info(f"No data for '{map_choice}'")
                         else:
                             st.warning("⚠️ Province Map Missing")
 
@@ -351,6 +377,9 @@ if df is not None:
                                 d_map_data = dist_stats[[map_choice]].reset_index()
                                 d_map_data.columns = ["District", "Percent"]
                                 
+                                # Title Case for Match
+                                d_map_data["District"] = d_map_data["District"].astype(str).str.title()
+                                
                                 fig_d_map = px.choropleth_mapbox(
                                     d_map_data, geojson=pak_dist_json, locations="District",
                                     featureidkey="properties.shapeName", 
@@ -361,7 +390,7 @@ if df is not None:
                                 fig_d_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=400)
                                 st.plotly_chart(fig_d_map, use_container_width=True)
                             else:
-                                st.info("No data for this option.")
+                                st.info(f"No data for '{map_choice}'")
                         else:
                              st.warning("⚠️ Please upload 'pakistan_districts.geojson'")
 
@@ -455,4 +484,3 @@ if df is not None:
         st.error(f"🚨 Critical Dashboard Error: {e}")
 else:
     st.error("⚠️ Data failed to load. Please check file formatting.")
-
