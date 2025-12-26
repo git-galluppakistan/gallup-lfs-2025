@@ -6,7 +6,7 @@ import os
 import gc
 import json
 import numpy as np
-import traceback # Added for Error Reporting
+import traceback
 
 # --- 1. SETUP ---
 st.set_page_config(page_title="Gallup Pakistan Dashboard", layout="wide", page_icon="📊")
@@ -24,7 +24,7 @@ st.markdown("""
 
 st.title("📊 Gallup Pakistan: Labour Force Survey 2024-25")
 
-# --- 2. DATA LOADERS (With Error Catching) ---
+# --- 2. DATA LOADERS (The "Perfect" Logic) ---
 @st.cache_data(ttl=3600)
 def load_geojson_dist():
     path = "pakistan_districts.geojson" 
@@ -50,6 +50,11 @@ def load_data():
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
             for col in chunk.columns:
                 chunk[col] = chunk[col].astype('category')
+            
+            # Numeric Age
+            age_col = next((c for c in chunk.columns if c in ['S4C6', 'Age']), None)
+            if age_col: chunk[age_col] = pd.to_numeric(chunk[age_col], errors='coerce')
+
             chunks.append(chunk)
         
         df = pd.concat(chunks, axis=0)
@@ -68,24 +73,21 @@ def load_data():
         if dfs_to_merge and "PCode" in df.columns:
             combined_map = pd.concat(dfs_to_merge, ignore_index=True)
             
-            # CLEANING: Match PCode formats
+            # CLEANING
             combined_map["PCode"] = combined_map["PCode"].astype(str).str.split('.').str[0].str.strip()
             df["PCode"] = df["PCode"].astype(str).str.split('.').str[0].str.strip()
 
             dist_map = combined_map.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
             
-            # Manual Fixes (Standardize to Upper Case immediately)
+            # Manual Fixes
             dist_map['352'] = 'LAHORE'
             dist_map['201'] = 'LAHORE'
             dist_map['25121030'] = 'LAHORE'
 
-            # Map & FORCE UPPER CASE to match GeoJSON
+            # Map & FORCE UPPER CASE
             df["District"] = df["PCode"].map(dist_map)
-            # Handle NaN values gracefully before string conversion
             df["District"] = df["District"].fillna("Unknown")
             df["District"] = df["District"].astype(str).str.upper().str.strip()
-            
-            # Convert back to category
             df["District"] = df["District"].astype('category')
 
         # C. Global Fixes
@@ -122,7 +124,7 @@ def reset_filters():
     st.session_state['sex_key'] = []
     st.session_state['edu_key'] = []
 
-# --- 4. DASHBOARD MAIN (Wrapped in Safety Block) ---
+# --- 4. DASHBOARD MAIN ---
 if df is not None:
     try:
         # --- TABS ---
@@ -159,15 +161,66 @@ if df is not None:
 
         # === TAB 2: EXPLORER ===
         with tab2:
-            # FILTERS
-            st.sidebar.markdown("## 🔍 Filters")
+            # --- HELPERS ---
+            def get_col(candidates):
+                for c in candidates:
+                    for col in df.columns:
+                        if c == col: return col
+                        if c in col: return col
+                return None
+
+            prov_col = get_col(["Province"])
+            reg_col = get_col(["Region"])
+            sex_col = get_col(["S4C5", "RSex", "Gender"])
+            edu_col = get_col(["S4C9", "Education", "Highest class"])
+            age_col = get_col(["S4C6", "Age"])
+            dist_col = "District"
+
+            # --- FILTERS (RESTORED!) ---
+            st.sidebar.markdown("## 🔍 Data Explorer Filters")
             if st.sidebar.button("🔄 Reset All Filters", on_click=reset_filters): st.rerun()
-            
-            prov = st.sidebar.multiselect("Province", df["Province"].unique(), key='prov_key')
-            
-            # MASK
+
+            def get_clean_list(column):
+                if column and column in df.columns:
+                    return sorted([x for x in df[column].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown"]])
+                return []
+
+            # 1. Province
+            prov_list = get_clean_list(prov_col)
+            sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list, key='prov_key')
+
+            # 2. Age
+            if age_col:
+                min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
+                sel_age = st.sidebar.slider("Age Range (Filter)", min_age, max_age, (min_age, max_age))
+
+            # 3. District (Dynamic)
+            sel_dist = []
+            if dist_col in df.columns:
+                valid_dist_mask = (df[prov_col] != "Balochistan")
+                if sel_prov:
+                    valid_dist_mask = valid_dist_mask & df[prov_col].isin(sel_prov)
+                
+                # Get Valid Districts (exclude trash values)
+                valid_districts = sorted([
+                    x for x in df[valid_dist_mask][dist_col].unique().tolist() 
+                    if str(x) not in ["#NULL!", "nan", "None", "", "Unknown", "nan", "UNKNOWN"]
+                ])
+                sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts, key='dist_key')
+
+            # 4. Other Filters
+            sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col), key='reg_key')
+            sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col), key='sex_key')
+            sel_edu = st.sidebar.multiselect("Education", get_clean_list(edu_col), key='edu_key')
+
+            # --- APPLY MASK ---
             mask = pd.Series(True, index=df.index)
-            if prov: mask = mask & df["Province"].isin(prov)
+            if prov_col: mask = mask & df[prov_col].isin(sel_prov)
+            if age_col: mask = mask & (df[age_col] >= sel_age[0]) & (df[age_col] <= sel_age[1])
+            if sel_dist and dist_col in df.columns: mask = mask & df[dist_col].isin(sel_dist)
+            if sel_reg: mask = mask & df[reg_col].isin(sel_reg)
+            if sel_sex: mask = mask & df[sex_col].isin(sel_sex)
+            if sel_edu: mask = mask & df[edu_col].isin(sel_edu)
             
             # HEADER
             c1, c2, c3 = st.columns(3)
@@ -184,20 +237,18 @@ if df is not None:
             except:
                 def_idx = 0
                 
-            target = st.selectbox("Select Variable:", questions, index=def_idx)
+            target = st.selectbox("Select Variable to Analyze:", questions, index=def_idx)
             
             # DATA PREP
             main_data = df.loc[mask].copy()
             main_data[target] = main_data[target].astype(str)
             main_data = main_data[~main_data[target].isin(["#NULL!", "nan", "None", "DK", "NR"])]
             
-            # Check S4C81 cleanup again
             if "S4C81" in target:
                  main_data[target] = main_data[target].replace({"1": "Yes", "2": "No", "Yes' 2'No": "Yes"})
 
             if not main_data.empty:
                 opts = sorted(main_data[target].unique())
-                # Handle empty options case
                 if len(opts) > 0:
                     mode_val = main_data[target].mode()[0]
                     if mode_val not in opts: mode_val = opts[0]
@@ -228,7 +279,7 @@ if df is not None:
                                 fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=400)
                                 st.plotly_chart(fig, use_container_width=True)
                 
-                # DISTRICT MAP (Corrected Key: properties.districts)
+                # DISTRICT MAP (Fixed Logic + Filters Applied)
                 with m2:
                     if map_choice:
                         st.subheader(f"District: {map_choice}")
@@ -244,7 +295,7 @@ if df is not None:
 
                                 fig = px.choropleth_mapbox(
                                     d_map, geojson=pak_dist_json, locations="District",
-                                    featureidkey="properties.districts", # Correct key from your file
+                                    featureidkey="properties.districts",
                                     color="Percent", color_continuous_scale="Spectral_r",
                                     mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
                                     opacity=0.7
@@ -257,9 +308,9 @@ if df is not None:
                             st.warning("District column missing or GeoJSON not loaded.")
 
                 # --- CHARTS ---
-                c1, c2 = st.columns(2)
+                c1, c2, c3 = st.columns([1.5, 1, 1])
                 with c1:
-                    st.markdown("**📊 Bar Chart**")
+                    st.markdown("**📊 Overall Results (%)**")
                     counts = main_data[target].value_counts().reset_index()
                     counts.columns = ["Answer", "Count"]
                     counts["%"] = (counts["Count"] / counts["Count"].sum() * 100)
@@ -267,14 +318,33 @@ if df is not None:
                     st.plotly_chart(fig, use_container_width=True)
                 
                 with c2:
-                    st.markdown("**📋 Data Table**")
-                    if map_choice and "District" in main_data.columns:
-                        d_stats = pd.crosstab(main_data["District"], main_data[target], normalize='index') * 100
-                        if map_choice in d_stats.columns:
-                            st.dataframe(d_stats.sort_values(by=map_choice, ascending=False).style.format("{:.1f}%"), use_container_width=True)
+                    st.markdown("**🗺️ By Province (%)**")
+                    if prov_col:
+                        p_grp = main_data.groupby([prov_col, target], observed=True).size().reset_index(name='Count')
+                        p_tot = p_grp.groupby(prov_col, observed=True)['Count'].transform('sum')
+                        p_grp['%'] = (p_grp['Count'] / p_tot * 100).fillna(0)
+                        fig = px.bar(p_grp, x=prov_col, y="%", color=target, barmode="stack")
+                        fig.update_layout(showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+
+                with c3:
+                    st.markdown("**🚻 By Gender**")
+                    if sex_col:
+                        g_counts = main_data[sex_col].value_counts().reset_index()
+                        g_counts.columns = ["Gender", "Count"]
+                        fig = px.pie(g_counts, names="Gender", values="Count", hole=0.5)
+                        fig.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.1))
+                        st.plotly_chart(fig, use_container_width=True)
+
+                # --- TABLES ---
+                st.markdown("---")
+                st.subheader("📋 Detailed Data View")
+                if map_choice and "District" in main_data.columns:
+                    d_stats = pd.crosstab(main_data["District"], main_data[target], normalize='index') * 100
+                    if map_choice in d_stats.columns:
+                        st.dataframe(d_stats.sort_values(by=map_choice, ascending=False).style.format("{:.1f}%"), use_container_width=True)
 
     except Exception as e:
-        # CRASH REPORTER: This prints the error on screen so you can read it!
         st.error(f"🚨 DASHBOARD CRASHED: {e}")
         st.code(traceback.format_exc())
 
