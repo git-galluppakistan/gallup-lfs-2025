@@ -49,6 +49,9 @@ def load_data():
 
         chunks = []
         for chunk in pd.read_csv(file_name, compression='zip', chunksize=50000, low_memory=True, dtype=str):
+            # Clean Headers
+            chunk.columns = chunk.columns.str.strip()
+            
             for col in chunk.columns:
                 chunk[col] = chunk[col].astype('category')
             
@@ -62,7 +65,23 @@ def load_data():
         del chunks
         gc.collect()
 
-        # B. Load Mappings
+        # --- B. PROVINCE STANDARDIZATION (FROM OLD SCRIPT) ---
+        # This exact dictionary ensures KP maps correctly
+        province_map = {
+            "KP": "Khyber Pakhtunkhwa", "KPK": "Khyber Pakhtunkhwa", "N.W.F.P": "Khyber Pakhtunkhwa",
+            "BALOUCHISTAN": "Balochistan", "Balouchistan": "Balochistan",
+            "FATA": "Federally Administered Tribal Areas", "F.A.T.A": "Federally Administered Tribal Areas",
+            "ICT": "Islamabad Capital Territory", "Islamabad": "Islamabad Capital Territory",
+            "Punjab": "Punjab", "Sindh": "Sindh",
+            "AJK": "Azad Jammu & Kashmir", "Azad Kashmir": "Azad Jammu & Kashmir",
+            "GB": "Gilgit-Baltistan", "Gilgit Baltistan": "Gilgit-Baltistan"
+        }
+        for col in df.columns:
+            if "Province" in col:
+                # Use simple mapping like the old script
+                df[col] = df[col].astype(str).map(province_map).fillna(df[col]).astype("category")
+
+        # --- C. DISTRICT MAPPING ---
         possible_files = ["district_mapping.csv", "DSTT.xlsx - Sheet1.csv", "lahore-district-mapping-file.xlsx - Lahore.csv"]
         dfs_to_merge = []
         for f in possible_files:
@@ -73,37 +92,22 @@ def load_data():
         
         if dfs_to_merge and "PCode" in df.columns:
             combined_map = pd.concat(dfs_to_merge, ignore_index=True)
-            combined_map["PCode"] = combined_map["PCode"].astype(str).str.split('.').str[0].str.strip()
-            df["PCode"] = df["PCode"].astype(str).str.split('.').str[0].str.strip()
-
             dist_map = combined_map.drop_duplicates(subset="PCode").set_index("PCode")["District"].to_dict()
             
-            # Manual Fixes
+            # Manual Fixes for Lahore (Just in case)
             dist_map['352'] = 'LAHORE'
             dist_map['201'] = 'LAHORE'
             dist_map['25121030'] = 'LAHORE'
 
-            # Map & FORCE UPPER CASE
-            df["District"] = df["PCode"].map(dist_map)
+            # Map & FORCE UPPER CASE (Matches GeoJSON 'districts' key)
+            df["District"] = df["PCode"].astype(str).map(dist_map)
             df["District"] = df["District"].fillna("Unknown")
             df["District"] = df["District"].astype(str).str.upper().str.strip()
             df["District"] = df["District"].astype('category')
 
-        # C. Global Fixes
+        # D. Global Value Fixes
         if "S4C81" in df.columns:
             df["S4C81"] = df["S4C81"].astype(str).replace({"1": "Yes", "2": "No", "Yes' 2'No": "Yes"}).astype("category")
-
-        # D. Province Standardization (Initial Clean)
-        if "Province" in df.columns:
-            # We standardize basic spelling first
-            df["Province"] = df["Province"].astype(str).str.strip()
-            # Clean common variations immediately
-            clean_map = {
-                "KPK": "KP", "N.W.F.P": "KP", "Khyber Pakhtunkhwa": "KP",
-                "BALOUCHISTAN": "Balochistan", 
-                "ICT": "Islamabad", "Islamabad Capital Territory": "Islamabad"
-            }
-            df["Province"] = df["Province"].replace(clean_map).astype("category")
 
         # E. Codebook Rename
         if os.path.exists("code.csv"):
@@ -124,7 +128,7 @@ df, status = load_data()
 pak_dist_json = load_geojson_dist()
 pak_prov_json = load_geojson_prov()
 
-# --- 3. SESSION STATE FOR RESET ---
+# --- 3. SESSION STATE ---
 if 'reset_trigger' not in st.session_state:
     st.session_state['reset_trigger'] = False
 
@@ -145,46 +149,7 @@ def to_excel(df_input):
 # --- 5. DASHBOARD MAIN ---
 if df is not None:
     try:
-        # === SIDEBAR: MAP FIXER ===
-        st.sidebar.markdown("## 🛠️ Map Settings")
-        
-        # PROVINCE NAME MATCHER
-        # Get names from GeoJSON to let user pick the right one for KP
-        prov_options = []
-        if pak_prov_json and 'features' in pak_prov_json:
-            # Try to find the name property
-            props = pak_prov_json['features'][0]['properties']
-            name_key = next((k for k in props.keys() if k in ['shapeName', 'name', 'NAME_1', 'province', 'PROVINCE']), list(props.keys())[0])
-            prov_options = sorted([f['properties'][name_key] for f in pak_prov_json['features']])
-        
-        # Default to something that looks like KP
-        kp_default_index = 0
-        for i, name in enumerate(prov_options):
-            if "Khyber" in name or "KP" in name:
-                kp_default_index = i
-                break
-        
-        if prov_options:
-            kp_map_name = st.sidebar.selectbox(
-                "Link Data 'KP' to Map Name:", 
-                prov_options, 
-                index=kp_default_index,
-                help="Select the name for KP as it appears in your Map File."
-            )
-            
-            # Apply the mapping dynamically!
-            # We map the Data's "KP" to whatever the user selected
-            active_prov_map = {
-                "KP": kp_map_name,
-                "Punjab": "Punjab", "Sindh": "Sindh", "Balochistan": "Balochistan",
-                "Islamabad": "Islamabad Capital Territory" # Default assumption
-            }
-            # Update DataFrame for Mapping View
-            if "Province" in df.columns:
-                # Create a temporary column for mapping to avoid breaking filters
-                df["Map_Province"] = df["Province"].map(active_prov_map).fillna(df["Province"])
-        
-        # === TABS ===
+        # --- TABS ---
         tab1, tab2 = st.tabs(["📑 Executive Summary", "🔍 Data Explorer (Full Dashboard)"])
 
         # === TAB 1: SUMMARY ===
@@ -206,6 +171,7 @@ if df is not None:
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader("Employment Ratio")
+                # Use dynamic data if available, else static
                 if "Province" in df.columns:
                     emp_counts = df["Province"].value_counts().reset_index()
                     emp_counts.columns = ["Province", "Count"]
@@ -220,21 +186,6 @@ if df is not None:
 
         # === TAB 2: EXPLORER ===
         with tab2:
-            # HELPERS
-            def get_col(candidates):
-                for c in candidates:
-                    for col in df.columns:
-                        if c == col: return col
-                        if c in col: return col
-                return None
-
-            prov_col = get_col(["Province"])
-            reg_col = get_col(["Region"])
-            sex_col = get_col(["S4C5", "RSex", "Gender"])
-            edu_col = get_col(["S4C9", "Education", "Highest class"])
-            age_col = get_col(["S4C6", "Age"])
-            dist_col = "District"
-
             # FILTERS
             st.sidebar.markdown("## 🔍 Data Explorer Filters")
             if st.sidebar.button("🔄 Reset All Filters", on_click=reset_filters): st.rerun()
@@ -244,13 +195,16 @@ if df is not None:
                     return sorted([x for x in df[column].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown"]])
                 return []
 
+            prov_col = "Province"
             prov_list = get_clean_list(prov_col)
             sel_prov = st.sidebar.multiselect("Province", prov_list, default=prov_list, key='prov_key')
 
+            age_col = next((c for c in df.columns if c in ['S4C6', 'Age']), None)
             if age_col:
                 min_age, max_age = int(df[age_col].min()), int(df[age_col].max())
                 sel_age = st.sidebar.slider("Age Range (Filter)", min_age, max_age, (min_age, max_age))
 
+            dist_col = "District"
             sel_dist = []
             if dist_col in df.columns:
                 valid_dist_mask = (df[prov_col] != "Balochistan")
@@ -258,6 +212,18 @@ if df is not None:
                     valid_dist_mask = valid_dist_mask & df[prov_col].isin(sel_prov)
                 valid_districts = sorted([x for x in df[valid_dist_mask][dist_col].unique().tolist() if str(x) not in ["#NULL!", "nan", "None", "", "Unknown", "nan", "UNKNOWN"]])
                 sel_dist = st.sidebar.multiselect("District (Excl. Balochistan)", valid_districts, key='dist_key')
+
+            # Helper for other filters
+            def get_col(candidates):
+                for c in candidates:
+                    for col in df.columns:
+                        if c == col: return col
+                        if c in col: return col
+                return None
+
+            reg_col = get_col(["Region"])
+            sex_col = get_col(["S4C5", "RSex", "Gender"])
+            edu_col = get_col(["S4C9", "Education", "Highest class"])
 
             sel_reg = st.sidebar.multiselect("Region", get_clean_list(reg_col), key='reg_key')
             sel_sex = st.sidebar.multiselect("Gender", get_clean_list(sex_col), key='sex_key')
@@ -280,7 +246,7 @@ if df is not None:
             st.markdown("---")
 
             # SELECTOR
-            questions = [c for c in df.columns if c not in ["PCode", "District", "Province", "Region", "S4C6", "Map_Province"]]
+            questions = [c for c in df.columns if c not in ["PCode", "District", "Province", "Region", "S4C6"]]
             default_target = "Marital Status (S4C7)"
             try:
                 def_idx = questions.index(default_target)
@@ -308,43 +274,40 @@ if df is not None:
                 # --- MAPS ---
                 m1, m2 = st.columns(2)
                 
-                # PROVINCE MAP
+                # PROVINCE MAP (WITH LABELS & PERCENTAGES)
                 with m1:
                     if map_choice:
                         st.subheader(f"Province: {map_choice}")
                         if pak_prov_json:
-                            # Use the Map_Province column which respects the sidebar selection!
-                            p_stats = pd.crosstab(main_data["Map_Province"], main_data[target], normalize='index') * 100
+                            p_stats = pd.crosstab(main_data["Province"], main_data[target], normalize='index') * 100
                             if map_choice in p_stats.columns:
                                 p_map = p_stats[[map_choice]].reset_index()
                                 p_map.columns = ["Province", "Percent"]
                                 
-                                # Use Dynamic Name Key from Sidebar Logic
-                                if 'features' in pak_prov_json:
-                                    props = pak_prov_json['features'][0]['properties']
-                                    name_key = next((k for k in props.keys() if k in ['shapeName', 'name', 'NAME_1', 'province', 'PROVINCE']), list(props.keys())[0])
-                                
                                 fig = px.choropleth_mapbox(
                                     p_map, geojson=pak_prov_json, locations="Province",
-                                    featureidkey=f"properties.{name_key}",
+                                    featureidkey="properties.shapeName",
                                     color="Percent", color_continuous_scale="Spectral_r",
                                     mapbox_style="carto-positron", zoom=4.5, center={"lat": 30.3753, "lon": 69.3451},
                                     opacity=0.7
                                 )
-                                # LABELS
+                                # ADD PERCENTAGE LABELS (Fixed Centroids)
                                 centroids = pd.DataFrame([
                                     {"Province": "Punjab", "Lat": 31.1, "Lon": 72.7},
                                     {"Province": "Sindh", "Lat": 25.9, "Lon": 68.5},
                                     {"Province": "Balochistan", "Lat": 28.5, "Lon": 65.1},
-                                    {"Province": kp_map_name, "Lat": 34.9, "Lon": 72.3}, # Use user selected name!
-                                    {"Province": "Islamabad", "Lat": 33.7, "Lon": 73.1}
+                                    {"Province": "Khyber Pakhtunkhwa", "Lat": 34.9, "Lon": 72.3},
+                                    {"Province": "Islamabad Capital Territory", "Lat": 33.7, "Lon": 73.1},
+                                    {"Province": "Gilgit-Baltistan", "Lat": 35.8, "Lon": 74.5},
+                                    {"Province": "Azad Jammu & Kashmir", "Lat": 33.7, "Lon": 73.8}
                                 ])
+                                
                                 label_data = pd.merge(centroids, p_map, on="Province", how="inner")
                                 if not label_data.empty:
                                     fig.add_trace(go.Scattermapbox(
                                         lat=label_data["Lat"], lon=label_data["Lon"], mode='text',
                                         text=label_data.apply(lambda x: f"{x['Percent']:.1f}%", axis=1),
-                                        textfont=dict(size=14, color='black'), showlegend=False
+                                        textfont=dict(size=14, color='black'), showlegend=False, hoverinfo='none'
                                     ))
                                 fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=400)
                                 st.plotly_chart(fig, use_container_width=True)
@@ -355,9 +318,12 @@ if df is not None:
                         st.subheader(f"District: {map_choice}")
                         if pak_dist_json and "District" in main_data.columns:
                             d_stats = pd.crosstab(main_data["District"], main_data[target], normalize='index') * 100
+                            
                             if map_choice in d_stats.columns:
                                 d_map = d_stats[[map_choice]].reset_index()
                                 d_map.columns = ["District", "Percent"]
+                                
+                                # UPPERCASE MATCHING for Districts
                                 d_map["District"] = d_map["District"].astype(str).str.upper().str.strip()
 
                                 fig = px.choropleth_mapbox(
@@ -403,10 +369,11 @@ if df is not None:
                         fig.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.1))
                         st.plotly_chart(fig, use_container_width=True)
 
-                # --- TABLES ---
+                # --- TABLES & DOWNLOAD ---
                 st.markdown("---")
                 t_head, t_btn = st.columns([4, 1])
                 t_head.subheader("📋 Detailed Data View")
+                
                 if map_choice and "District" in main_data.columns:
                     d_stats = pd.crosstab(main_data["District"], main_data[target], normalize='index') * 100
                     if map_choice in d_stats.columns:
